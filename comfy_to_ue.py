@@ -29,7 +29,10 @@ def _get_comfy_gateway_key() -> str:
 
 
 def _comfy_headers(extra: dict | None = None) -> dict:
-    hdrs = {"X-PBR-Gateway-Key": _get_comfy_gateway_key()}
+    hdrs = {
+        "X-PBR-Gateway-Key": _get_comfy_gateway_key(),
+        "X-PBR-Instance-ID": get_instance_fingerprint(),
+    }
     if extra:
         hdrs.update(extra)
     return hdrs
