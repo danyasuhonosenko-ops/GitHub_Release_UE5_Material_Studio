@@ -329,11 +329,11 @@ def refresh_generations_ui() -> None:
     if lbl:
         try:
             if credits <= 0:
-                txt = "Generations: 0 left [TOP UP!]"
+                txt = "Credits: 0 left (TOP UP)"
             elif credits <= LOW_GENERATIONS_WARNING_THRESHOLD:
-                txt = f"Generations: {credits} left [LOW!]"
+                txt = f"Credits: {credits} left (LOW)"
             else:
-                txt = f"Generations: {credits} left"
+                txt = f"Credits: {credits} left"
             lbl.set_text(txt)
             _style_text(lbl, size=8, bold=True, color=col)
         except Exception:
@@ -528,16 +528,32 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
     return True, f"Saved License Key '{key_clean[:12]}...'. Ready for cloud verification (Balance: {st.get('credits', 0)} Gens)."
 
 
+def _show_low_generations_popup(remaining: int) -> None:
+    """Shows a native English Unreal Engine warning dialog when credits drop to <= 10."""
+    try:
+        unreal.EditorDialog.show_message(
+            "Low AI Generation Credits Warning",
+            (
+                f"You have {remaining} AI Generation credits remaining (<= {LOW_GENERATIONS_WARNING_THRESHOLD} left).\n\n"
+                "Please make sure you have enough credits to convert all Corona materials from your 3ds Max scene into Unreal Engine.\n\n"
+                "You can top up your balance anytime via '+ Buy Generations' or by entering a 12-Word Seed Key."
+            ),
+            unreal.AppMsgType.OK,
+        )
+    except Exception:
+        pass
+
+
 def _show_zero_generations_popup() -> None:
-    """Shows a native Unreal Engine modal dialog when 0 generations remain, offering a 1-click redirect to + Buy Generations."""
+    """Shows a native English Unreal Engine modal dialog when 0 generations remain, offering a 1-click redirect to + Buy Generations."""
     try:
         res = unreal.EditorDialog.show_message(
-            "Out of AI Generations — Пополните баланс (0 Left)",
+            "Out of AI Generation Credits (0 Left)",
             (
-                "На вашей копии закончились AI-генерации (Generations: 0 left)!\n\n"
-                "Проверьте достаточное количество кредитов для конвертации всех материалов Corona из вашей сцены в 3ds Max в Unreal Engine.\n\n"
-                "• Введите 12-словный ключ активации в поле '12-Word Seed / Key...'\n"
-                "• Или нажмите «Да (Yes)», чтобы открыть страницу пополнения баланса (+ Buy Generations)."
+                "You have 0 AI Generation credits remaining!\n\n"
+                "Please make sure you have enough credits to convert all Corona materials from your 3ds Max scene into Unreal Engine.\n\n"
+                "• Enter a 12-Word Seed Key in the '12-Word Seed / Key...' box\n"
+                "• Or click 'Yes' to open the '+ Buy Generations' page in your browser."
             ),
             unreal.AppMsgType.YES_NO,
         )
@@ -568,9 +584,12 @@ def consume_generation_credit(cost: int = 1, from_completion: bool = True) -> bo
     if 0 < new_bal <= LOW_GENERATIONS_WARNING_THRESHOLD:
         try:
             _set_panel_status(
-                f"[Low Credits: {new_bal} left] Проверьте достаточное количество кредитов для конвертации всех материалов Corona из вашей сцены в 3ds Max в Unreal Engine!",
+                f"[Low Credits Warning: {new_bal} left] Please check that you have enough credits to convert all Corona materials from your 3ds Max scene into Unreal Engine!",
                 color=(1.0, 0.78, 0.24, 1.0),
             )
+            if cur > LOW_GENERATIONS_WARNING_THRESHOLD or getattr(builtins, "_COMFY_LOW_WARN_SHOWN_AT", None) != new_bal and new_bal in (10, 5, 1):
+                builtins._COMFY_LOW_WARN_SHOWN_AT = new_bal
+                _show_low_generations_popup(new_bal)
         except Exception:
             pass
     return True
@@ -9025,17 +9044,29 @@ def _setup_named_button(
     apply_layout: bool = True,
     tooltip: str = "",
 ):
-    """Finds or creates a named EditorUtilityButton with a named TextBlock child."""
+    """Finds or creates a named EditorUtilityButton with a centered, non-wrapping TextBlock child."""
     created_new = (unreal.find_object(owner, btn_name) is None) if is_wt else (owner.find_child_widget_by_name(btn_name) is None)
     btn = _get_or_create_widget(owner, is_wt, unreal.EditorUtilityButton, btn_name)
     lbl = _get_or_create_widget(owner, is_wt, unreal.TextBlock, lbl_name)
+    font_sz = 7 if (len(text_str) >= 16 and width <= 145.0) else 8
     if apply_layout or created_new or lbl.get_parent() != btn:
         lbl.set_text(text_str)
-        _style_text(lbl, size=8, bold=True, color=color)
+        _style_text(lbl, size=font_sz, bold=True, color=color)
         if lbl.get_parent() != btn:
             for c in list(btn.get_all_children()):
                 c.remove_from_parent()
             btn.add_child(lbl)
+        try:
+            b_slot = lbl.slot
+            if b_slot:
+                if hasattr(b_slot, "set_padding"):
+                    b_slot.set_padding(unreal.Margin(2.0, 1.0, 2.0, 1.0))
+                if hasattr(b_slot, "set_horizontal_alignment"):
+                    b_slot.set_horizontal_alignment(unreal.HorizontalAlignment.H_ALIGN_CENTER)
+                if hasattr(b_slot, "set_vertical_alignment"):
+                    b_slot.set_vertical_alignment(unreal.VerticalAlignment.V_ALIGN_CENTER)
+        except Exception:
+            pass
     if tooltip:
         try:
             btn.set_tool_tip_text(tooltip)
@@ -9402,14 +9433,14 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     _setup_named_label(
         w, is_wt, canvas, "HeaderTitleLabel",
         "ComfyUI PBR & Substance Studio",
-        14.0, 6.0, 256.0, 18.0,
-        size=11, bold=True, color=(0.95, 0.96, 1.0, 1.0),
+        14.0, 5.0, 258.0, 16.0,
+        size=10, bold=True, color=(0.95, 0.96, 1.0, 1.0),
         apply_layout=True,
     )
     _setup_named_label(
         w, is_wt, canvas, "HeaderSubtitleLabel",
-        "Ubisoft CHORD / DA2 PBR, 368 Presets & Seams",
-        14.0, 25.0, 256.0, 14.0,
+        "Ubisoft CHORD / DA2 PBR • 368 Presets",
+        14.0, 23.0, 258.0, 14.0,
         size=8, bold=False, color=(0.62, 0.65, 0.72, 1.0),
         apply_layout=True,
     )
@@ -9418,14 +9449,14 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         hdr_gen_badge = _setup_named_label(
             w, is_wt, canvas, "HeaderGenerationsBadge",
             "Support Indie Dev:",
-            274.0, 4.0, 130.0, 14.0,
+            280.0, 4.0, 124.0, 13.0,
             size=8, bold=True, color=(1.0, 0.72, 0.86, 1.0),
             apply_layout=True,
         )
         hdr_donate_btn = _setup_named_button(
             w, is_wt, canvas, "HeaderBuyGenBtn", "HeaderBuyGenBtnLabel",
             "Donate / Support",
-            274.0, 18.0, 130.0, 20.0,
+            280.0, 18.0, 124.0, 20.0,
             color=(1.0, 0.58, 0.76, 1.0),
             apply_layout=True,
             tooltip="Support the author with a donation (opens donation page in your browser)",
@@ -9437,7 +9468,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     _setup_named_label(
         w, is_wt, canvas, "PromptSectionLabel",
         "1. Prompt & Target Master Mtl:",
-        14.0, 46.0, 198.0, 14.0,
+        14.0, 45.0, 196.0, 14.0,
         size=8, bold=True, color=(0.76, 0.82, 0.92, 1.0),
         apply_layout=True,
     )
@@ -9451,12 +9482,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         str(path_box.get_text()) if path_box else DEFAULT_UE_FOLDER,
         select_path=getattr(builtins, "_COMFY_PROMPT_MASTER_MAT_PATH", DEFAULT_MASTER_MAT_PATH),
     )
-    _place_on_canvas(canvas, prompt_mm_combo, 216.0, 41.0, 188.0, 22.0, apply_layout=True)
+    _place_on_canvas(canvas, prompt_mm_combo, 214.0, 42.0, 190.0, 22.0, apply_layout=True)
 
     if prompt_box:
         if not str(prompt_box.get_text()).strip():
             prompt_box.set_text("natural oak wood veneer, clean continuous wood grain")
-        _place_on_canvas(canvas, prompt_box, 14.0, 66.0, 390.0, 28.0, apply_layout=apply_layout)
+        _place_on_canvas(canvas, prompt_box, 14.0, 67.0, 390.0, 28.0, apply_layout=True)
 
     if btn:
         _place_on_canvas(canvas, btn, 14.0, 98.0, 142.0, 26.0, apply_layout=True)
@@ -9468,6 +9499,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
                 for c in list(btn.get_all_children()):
                     c.remove_from_parent()
                 btn.add_child(gen_lbl)
+            try:
+                g_slot = gen_lbl.slot
+                if g_slot and hasattr(g_slot, "set_padding"):
+                    g_slot.set_padding(unreal.Margin(2.0, 1.0, 2.0, 1.0))
+            except Exception:
+                pass
 
     gen_mask_btn = _setup_named_button(
         w, is_wt, canvas, "GenerateMaskBtn", "GenerateMaskBtnLabel",
@@ -9551,12 +9588,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         _place_on_canvas(canvas, s_box, pos_x, pos_y, width, height, apply_layout=apply_layout)
         return s_box
 
-    # === License / Promo Key Input, AI Generations Counter & "+ Buy Generations" Redirect Row (Y = 126.5) ===
+    # === License / Promo Key Input, AI Generations Counter & "+ Buy Generations" Redirect Row (Y = 127.0) ===
     if not is_wt:
         lic_key_box = _create_search_box(
-            "LicenseKeyBox", 14.0, 126.5, 136.0, "12-Word Seed / Key...", height=22.0
+            "LicenseKeyBox", 14.0, 127.0, 132.0, "12-Word Seed / Key...", height=22.0
         )
-        _place_on_canvas(canvas, lic_key_box, 14.0, 126.5, 136.0, 22.0, apply_layout=True)
+        _place_on_canvas(canvas, lic_key_box, 14.0, 127.0, 132.0, 22.0, apply_layout=True)
         try:
             lic_key_box.set_hint_text("12-Word Seed / Key...")
             lic_key_box.set_tool_tip_text(
@@ -9567,10 +9604,15 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
 
         cur_gens = get_remaining_generations()
         gen_col = _get_generations_badge_color(cur_gens)
+        init_gen_txt = (
+            "Credits: 0 left (TOP UP)"
+            if cur_gens <= 0
+            else (f"Credits: {cur_gens} left (LOW)" if cur_gens <= LOW_GENERATIONS_WARNING_THRESHOLD else f"Credits: {cur_gens} left")
+        )
         gen_count_lbl = _setup_named_label(
             w, is_wt, canvas, "GenerationsCountLabel",
-            f"Generations: {cur_gens} left",
-            156.0, 130.0, 118.0, 15.0,
+            init_gen_txt,
+            150.0, 130.5, 124.0, 15.0,
             size=8, bold=True, color=gen_col,
             apply_layout=True,
         )
@@ -9578,7 +9620,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         buy_gens_btn = _setup_named_button(
             w, is_wt, canvas, "BuyGenerationsBtn", "BuyGenerationsBtnLabel",
             "+ Buy Generations",
-            278.0, 126.5, 126.0, 22.0,
+            278.0, 127.0, 126.0, 22.0,
             color=(1.0, 0.85, 0.32, 1.0),
             apply_layout=True,
             tooltip="Open the payment page in your browser to purchase AI Generation packs (or activate a pasted 12-Word Seed Key)",
@@ -12659,16 +12701,16 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     _setup_named_label(
         w, is_wt, canvas, "SubstanceSeamsSectionLabel",
         "5. Substance Seams & Tile Generator:",
-        14.0, 1652.0, 248.0, 16.0,
-        size=9, bold=True, color=(0.55, 0.88, 1.0, 1.0),
-        apply_layout=apply_layout,
+        14.0, 1652.0, 266.0, 15.0,
+        size=8, bold=True, color=(0.55, 0.88, 1.0, 1.0),
+        apply_layout=True,
     )
     _setup_named_label(
         w, is_wt, canvas, "SeamsTriplanarLabel",
-        "Triplanar Seams (3P):",
-        264.0, 1653.0, 114.0, 14.0,
+        "Triplanar (3P):",
+        290.0, 1653.0, 88.0, 14.0,
         size=8, bold=True, color=(0.55, 0.94, 1.0, 1.0),
-        apply_layout=apply_layout,
+        apply_layout=True,
     )
     seams_trip_check = _create_inline_checkbox(
         "SeamsTriplanarCheck",
@@ -13047,17 +13089,17 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     # =========================================================================
     _setup_named_label(
         w, is_wt, canvas, "AntiTileSectionHeaderLabel",
-        "5A. Anti-Tiling Studio (Dual-Scale, Macro & Vertex):",
-        14.0, 2188.0, 260.0, 16.0,
+        "5A. Anti-Tiling & Macro Variation:",
+        14.0, 2188.0, 266.0, 15.0,
         size=8, bold=True, color=(0.55, 0.94, 1.0, 1.0),
-        apply_layout=apply_layout,
+        apply_layout=True,
     )
     _setup_named_label(
         w, is_wt, canvas, "AntiTileTriplanarLabel",
-        "Triplanar Noise (3P):",
-        264.0, 2189.0, 114.0, 14.0,
+        "Triplanar (3P):",
+        290.0, 2189.0, 88.0, 14.0,
         size=8, bold=True, color=(0.55, 0.94, 1.0, 1.0),
-        apply_layout=apply_layout,
+        apply_layout=True,
     )
     at_trip_check = _create_inline_checkbox(
         "AntiTileTriplanarCheck",
