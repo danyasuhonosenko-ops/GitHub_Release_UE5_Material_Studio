@@ -60,7 +60,7 @@ PANEL_ASSET_PATH = "/Game/ConfyUI_plagin/BP_ComfyPanel"
 # --- AI Generation Credits, Instance Fingerprinting & Ledger Audit Telemetry ---
 BUY_GENERATIONS_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#get-ai-generation-credits"
 DONATE_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#donate--support"
-TELEMETRY_AUDIT_URL = ""  # Optional Cloudflare Worker / Webhook endpoint for global supply vs revenue audit
+TELEMETRY_AUDIT_URL = "http://127.0.0.1:8788/api/audit"  # Audit Scout Dashboard / Cloudflare Worker endpoint
 STUDIO_LICENSE_FILE = os.path.join(_SCRIPT_DIR, "studio_license_state.json")
 DEFAULT_FREE_GENERATIONS = 25
 
@@ -9526,6 +9526,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
                 (hdr_donate_btn, _on_donate_clicked),
             ]
         )
+        send_ledger_audit_heartbeat("panel_init")
 
     # === Section 1B: Generate Seamless PBR Material from Reference Image (Y = 152..250) ===
     _setup_named_label(
