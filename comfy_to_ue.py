@@ -503,7 +503,11 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
         st["credits"] = max(0, int(st.get("credits", 0))) + seed_credits
         _save_studio_license_state(st)
         refresh_generations_ui()
-        send_ledger_audit_heartbeat("seed_redeemed", {"redeemed_id": seed_id, "added_credits": seed_credits})
+        send_ledger_audit_heartbeat(
+            "seed_redeemed",
+            {"redeemed_id": seed_id, "added_credits": seed_credits},
+            sync_now=True,
+        )
         return True, f"{seed_msg} (New Balance: {st['credits']} Gens)"
 
     # 2. Check short promo codes via salted SHA-256 digest (plaintext promo codes are hidden)
@@ -520,7 +524,11 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
         st["credits"] = max(0, int(st.get("credits", 0))) + added
         _save_studio_license_state(st)
         refresh_generations_ui()
-        send_ledger_audit_heartbeat("promo_redeemed", {"redeemed_id": promo_canonical, "added_credits": added})
+        send_ledger_audit_heartbeat(
+            "promo_redeemed",
+            {"redeemed_id": promo_canonical, "added_credits": added},
+            sync_now=True,
+        )
         return True, f"Activated '{key_up}'! +{added} AI Generations added (Balance: {st['credits']} Gens)."
     st["license_key"] = key_clean
     _save_studio_license_state(st)
@@ -9629,6 +9637,37 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         builtins._COMFY_LICENSE_KEY_BOX = lic_key_box
         builtins._COMFY_BUY_GENS_BTN = buy_gens_btn
 
+        def _clear_license_box_safely():
+            if not lic_key_box:
+                return
+            try:
+                builtins._COMFY_SYNCING_UI = True
+                lic_key_box.set_text("")
+            except Exception:
+                pass
+            finally:
+                builtins._COMFY_SYNCING_UI = False
+
+        def _on_license_key_changed(new_text):
+            if getattr(builtins, "_COMFY_SYNCING_UI", False):
+                return
+            k_str = str(new_text or "").strip()
+            if not k_str:
+                return
+            # Auto-activate immediately when a valid 12-word seed phrase is pasted
+            tokens = [t.strip().lower() for t in k_str.replace(",", " ").replace("-", " ").split() if t.strip()]
+            if len(tokens) == 12:
+                ok_v, _, _, _, _ = verify_12word_seed_phrase(k_str)
+                if ok_v:
+                    ok, msg = activate_license_or_promo_key(k_str)
+                    if ok:
+                        builtins._COMFY_LAST_KEY_ACTIVATED_TS = time.time()
+                        _clear_license_box_safely()
+                    _set_panel_status(
+                        f"[Seed / License] {msg}",
+                        color=(0.45, 0.96, 0.65, 1.0) if ok else (1.0, 0.72, 0.32, 1.0),
+                    )
+
         def _on_license_key_committed(new_text, _commit_method):
             if getattr(builtins, "_COMFY_SYNCING_UI", False):
                 return
@@ -9636,20 +9675,18 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             if not k_str:
                 return
             ok, msg = activate_license_or_promo_key(k_str)
-            if ok and lic_key_box:
-                try:
-                    builtins._COMFY_SYNCING_UI = True
-                    lic_key_box.set_text("")
-                except Exception:
-                    pass
-                finally:
-                    builtins._COMFY_SYNCING_UI = False
+            if ok:
+                builtins._COMFY_LAST_KEY_ACTIVATED_TS = time.time()
+                _clear_license_box_safely()
             _set_panel_status(
                 f"[Seed / License] {msg}",
                 color=(0.45, 0.96, 0.65, 1.0) if ok else (1.0, 0.72, 0.32, 1.0),
             )
 
         def _on_buy_generations_clicked():
+            # If focus-loss just redeemed a key milliseconds ago, don't open the browser
+            if time.time() - getattr(builtins, "_COMFY_LAST_KEY_ACTIVATED_TS", 0.0) < 2.0:
+                return
             typed_k = str(lic_key_box.get_text() or "").strip() if lic_key_box else ""
             st_now = _load_studio_license_state()
             redeemed_now = set(st_now.get("redeemed_keys") or [])
@@ -9657,14 +9694,9 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             p_hash = _hash_promo_token(typed_k) if typed_k else ""
             if word_cnt >= 4 or (p_hash in _PROMO_HASH_PACKS and f"PROMO-{p_hash.upper()}" not in redeemed_now):
                 ok, msg = activate_license_or_promo_key(typed_k)
-                if ok and lic_key_box:
-                    try:
-                        builtins._COMFY_SYNCING_UI = True
-                        lic_key_box.set_text("")
-                    except Exception:
-                        pass
-                    finally:
-                        builtins._COMFY_SYNCING_UI = False
+                if ok:
+                    builtins._COMFY_LAST_KEY_ACTIVATED_TS = time.time()
+                    _clear_license_box_safely()
                 _set_panel_status(
                     f"[Seed / Promo] {msg}",
                     color=(0.45, 0.96, 0.65, 1.0) if ok else (1.0, 0.72, 0.32, 1.0),
@@ -9675,14 +9707,17 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         def _on_donate_clicked():
             open_donate_url()
 
+        _clear_delegate_safe(lic_key_box.on_text_changed)
         _clear_delegate_safe(lic_key_box.on_text_committed)
         _clear_delegate_safe(buy_gens_btn.on_clicked)
         _clear_delegate_safe(hdr_donate_btn.on_clicked)
+        lic_key_box.on_text_changed.add_callable(_on_license_key_changed)
         lic_key_box.on_text_committed.add_callable(_on_license_key_committed)
         buy_gens_btn.on_clicked.add_callable(_on_buy_generations_clicked)
         hdr_donate_btn.on_clicked.add_callable(_on_donate_clicked)
         builtins._COMFY_BTN_REFS.extend(
             [
+                (lic_key_box, _on_license_key_changed),
                 (lic_key_box, _on_license_key_committed),
                 (buy_gens_btn, _on_buy_generations_clicked),
                 (hdr_donate_btn, _on_donate_clicked),
