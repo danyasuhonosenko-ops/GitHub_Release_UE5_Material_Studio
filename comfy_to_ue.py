@@ -120,6 +120,8 @@ PANEL_ASSET_PATH = "/Game/ConfyUI_plagin/BP_ComfyPanel"
 # --- AI Generation Credits, Instance Fingerprinting & Ledger Audit Telemetry ---
 BUY_GENERATIONS_URL = "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio#get-ai-generation-credits"
 DONATE_URL = "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio#donate--support"
+FEEDBACK_DIRECT_URL = "https://t.me/+gzRT98zYKOwzZThi"
+FEEDBACK_WHATSAPP_URL = "https://chat.whatsapp.com/EPoUXQKaCVn0ueNqHQHDlK"
 TELEMETRY_AUDIT_URL = "http://100.118.26.47:8788/api/audit"  # Primary Audit Scout Server (falls back to 100.122.152.89 & 127.0.0.1)
 GITHUB_CLUSTER_CONFIG_URL = "https://raw.githubusercontent.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio/main/render_cluster_config.json"
 STUDIO_LICENSE_FILE = os.path.join(_SCRIPT_DIR, "studio_license_state.json")
@@ -519,6 +521,77 @@ def open_buy_generations_url() -> str:
     except Exception:
         pass
     return target_url
+
+
+def open_feedback_dialog(channel: str = "tg") -> str:
+    """
+    Opens the developer's direct Telegram ('tg') or WhatsApp ('wa') support community in the browser
+    via native Unreal API (zero subprocess/PowerShell calls — 100% Antivirus/Kaspersky safe) and
+    automatically copies the user's Copy ID + diagnostic header to the clipboard.
+    """
+    inst_id = get_instance_fingerprint()
+    credits = get_remaining_generations()
+    st = _load_studio_license_state()
+    is_wa = str(channel or "tg").lower().startswith("wa")
+    if is_wa:
+        target_url = str(st.get("whatsapp_url") or FEEDBACK_WHATSAPP_URL).strip() or FEEDBACK_WHATSAPP_URL
+        clip_text = f"[AI PBR Studio Support] Copy ID: {inst_id} | Balance: {credits} Gens\nIssue / Screenshot: "
+    else:
+        target_url = str(st.get("feedback_url") or FEEDBACK_DIRECT_URL).strip() or FEEDBACK_DIRECT_URL
+        clip_text = f"[AI PBR Studio Feedback] Copy ID: {inst_id} | Balance: {credits} Gens\nОписание / Скриншот: "
+
+    try:
+        import ctypes
+        u32 = ctypes.windll.user32
+        k32 = ctypes.windll.kernel32
+        k32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        k32.GlobalAlloc.restype = ctypes.c_void_p
+        k32.GlobalLock.argtypes = [ctypes.c_void_p]
+        k32.GlobalLock.restype = ctypes.c_void_p
+        k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        u32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+        data_bytes = (clip_text + "\0").encode("utf-16le")
+        if u32.OpenClipboard(None):
+            u32.EmptyClipboard()
+            h_mem = k32.GlobalAlloc(0x0002, len(data_bytes))
+            if h_mem:
+                ptr = k32.GlobalLock(h_mem)
+                if ptr:
+                    ctypes.memmove(ptr, data_bytes, len(data_bytes))
+                    k32.GlobalUnlock(h_mem)
+                    u32.SetClipboardData(13, h_mem)
+            u32.CloseClipboard()
+    except Exception:
+        pass
+
+    launched = False
+    try:
+        unreal.SystemLibrary.launch_url(target_url)
+        launched = True
+    except Exception:
+        pass
+    if not launched:
+        try:
+            import webbrowser
+            webbrowser.open(target_url)
+        except Exception:
+            pass
+
+    try:
+        if is_wa:
+            _set_panel_status(
+                f"[WhatsApp Support] Opened WhatsApp Community ({target_url})! Copy ID ({inst_id}) copied to clipboard (Ctrl+V).",
+                color=(0.45, 0.98, 0.65, 1.0),
+            )
+        else:
+            _set_panel_status(
+                f"[TG Support] Открыт Telegram-чат ({target_url})! Copy ID ({inst_id}) скопирован в буфер (Ctrl+V).",
+                color=(0.55, 0.96, 0.84, 1.0),
+            )
+    except Exception:
+        pass
+    return target_url
+
 
 
 # --- 12-Word Wallet-Style Cryptographic Seed Verifier (Public Key Only) ---
@@ -9315,7 +9388,7 @@ def _setup_named_label(
     if apply_layout or created_new:
         lbl.set_text(text_str)
         _style_text(lbl, size=size, bold=bold, color=color)
-    _place_on_canvas(canvas, lbl, pos_x, pos_y, width, height, apply_layout=apply_layout)
+    _place_on_canvas(canvas, lbl, pos_x, pos_y, width, height, apply_layout=(apply_layout or created_new))
     return lbl
 
 
@@ -9362,7 +9435,7 @@ def _setup_named_button(
             btn.set_tool_tip_text(tooltip)
         except Exception:
             pass
-    _place_on_canvas(canvas, btn, pos_x, pos_y, width, height, apply_layout=apply_layout)
+    _place_on_canvas(canvas, btn, pos_x, pos_y, width, height, apply_layout=(apply_layout or created_new))
     return btn
 
 
@@ -9540,6 +9613,8 @@ def bake_studio_ui_to_blueprint(force_reset_layout: bool = False) -> bool:
             and unreal.find_object(wt, "BlendPresetBtn_7") is not None
             and unreal.find_object(wt, "AntiTileSectionHeaderLabel") is not None
             and unreal.find_object(wt, "CopyInstanceIdBtn") is not None
+            and unreal.find_object(wt, "FeedbackBtn") is not None
+            and unreal.find_object(wt, "FeedbackWhatsAppBtn") is not None
             and unreal.find_object(wt, "HeaderBuyGenBtn") is not None
             and unreal.find_object(wt, "LicenseKeyBox") is not None
             and unreal.find_object(wt, "GenerationsCountLabel") is not None
@@ -9786,10 +9861,26 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         apply_layout=apply_layout,
         tooltip=f"Click to copy your Support Copy ID ({inst_id_hdr}) to clipboard",
     )
+    feedback_btn = _setup_named_button(
+        w, is_wt, canvas, "FeedbackBtn", "FeedbackBtnLabel",
+        "TG Chat",
+        248.0, 31.0, 74.0, 20.0,
+        color=(0.48, 0.88, 1.0, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Open Telegram Support & Community Chat (copies your Copy ID to clipboard for bug reports & screenshots)",
+    )
+    feedback_wa_btn = _setup_named_button(
+        w, is_wt, canvas, "FeedbackWhatsAppBtn", "FeedbackWhatsAppBtnLabel",
+        "WhatsApp",
+        326.0, 31.0, 78.0, 20.0,
+        color=(0.42, 0.96, 0.62, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Open WhatsApp International Support Community (copies your Copy ID to clipboard for bug reports & screenshots)",
+    )
     hdr_donate_btn = _setup_named_button(
         w, is_wt, canvas, "HeaderBuyGenBtn", "HeaderBuyGenBtnLabel",
         "Donate",
-        318.0, 6.0, 86.0, 22.0,
+        348.0, 6.0, 56.0, 22.0,
         color=(1.0, 0.58, 0.76, 1.0),
         apply_layout=apply_layout,
         tooltip="Support the project with a donation (opens donation page in your browser)",
@@ -9797,6 +9888,8 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     if not is_wt:
         builtins._COMFY_HDR_GEN_BADGE = None
         builtins._COMFY_COPY_ID_BTN = copy_id_btn
+        builtins._COMFY_FEEDBACK_BTN = feedback_btn
+        builtins._COMFY_FEEDBACK_WA_BTN = feedback_wa_btn
         builtins._COMFY_HDR_DONATE_BTN = hdr_donate_btn
 
     # === Section 1: Prompt + Target Master Material Selector + GENERATE PBR / B&W MASK / STOP Buttons ===
@@ -10043,16 +10136,26 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         def _on_copy_id_clicked():
             copy_instance_id_to_clipboard()
 
+        def _on_feedback_clicked():
+            open_feedback_dialog("tg")
+
+        def _on_feedback_wa_clicked():
+            open_feedback_dialog("wa")
+
         _clear_delegate_safe(lic_key_box.on_text_changed)
         _clear_delegate_safe(lic_key_box.on_text_committed)
         _clear_delegate_safe(buy_gens_btn.on_clicked)
         _clear_delegate_safe(hdr_donate_btn.on_clicked)
         _clear_delegate_safe(copy_id_btn.on_clicked)
+        _clear_delegate_safe(feedback_btn.on_clicked)
+        _clear_delegate_safe(feedback_wa_btn.on_clicked)
         lic_key_box.on_text_changed.add_callable(_on_license_key_changed)
         lic_key_box.on_text_committed.add_callable(_on_license_key_committed)
         buy_gens_btn.on_clicked.add_callable(_on_buy_generations_clicked)
         hdr_donate_btn.on_clicked.add_callable(_on_donate_clicked)
         copy_id_btn.on_clicked.add_callable(_on_copy_id_clicked)
+        feedback_btn.on_clicked.add_callable(_on_feedback_clicked)
+        feedback_wa_btn.on_clicked.add_callable(_on_feedback_wa_clicked)
         builtins._COMFY_BTN_REFS.extend(
             [
                 (lic_key_box, _on_license_key_changed),
@@ -10060,6 +10163,8 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
                 (buy_gens_btn, _on_buy_generations_clicked),
                 (hdr_donate_btn, _on_donate_clicked),
                 (copy_id_btn, _on_copy_id_clicked),
+                (feedback_btn, _on_feedback_clicked),
+                (feedback_wa_btn, _on_feedback_wa_clicked),
             ]
         )
         send_ledger_audit_heartbeat("panel_init")
@@ -16514,6 +16619,8 @@ def register_auto_enhance_watcher() -> None:
                 or w.find_child_widget_by_name("Spin_MP_TileX") is None
                 or w.find_child_widget_by_name("ResetAllMeshPaintBtn") is None
                 or w.find_child_widget_by_name("BuyGenerationsBtn") is None
+                or w.find_child_widget_by_name("FeedbackBtn") is None
+                or w.find_child_widget_by_name("FeedbackWhatsAppBtn") is None
             ):
                 enhance_comfy_panel_ui(w)
             if not getattr(builtins, "_COMFY_DISP_NRM_MM_UPGRADED_V4", False):

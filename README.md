@@ -78,9 +78,11 @@ comfy_to_ue.launch_comfy_studio()
 
 ---
 
-## Author & Contact
+## Author & Community Support (Feedback / Bug Reports)
 
 Created and maintained by **Daniil Sukhnosenko**.  
-For feedback, bug reports, or **Cloud AI Beta Key** requests, connect with **Daniil Sukhnosenko on LinkedIn** or via email: `hurling-shawl22@bravealias.com`.
+- **🌍 International Community & Support (WhatsApp):** [Join WhatsApp Community](https://chat.whatsapp.com/EPoUXQKaCVn0ueNqHQHDlK)  
+- **🇷🇺 Чат сообщества и техподдержка (Telegram):** [Digital Asset Life Chat](https://t.me/+gzRT98zYKOwzZThi)  
+- **Email / LinkedIn:** `hurling-shawl22@bravealias.com`
 
 © 2026 Daniil Sukhnosenko. All rights reserved.

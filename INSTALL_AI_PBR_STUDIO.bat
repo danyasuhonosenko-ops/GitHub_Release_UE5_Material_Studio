@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 title AI PBR & Substance Studio — One-Click UE5 Client Installer
 echo ============================================================================
@@ -48,6 +48,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "    Write-Host ('[OK] Плагины PythonScriptPlugin и EditorScriptingUtilities активированы в ' + $uproj.Name) -ForegroundColor Green; " ^
   "  } catch {} " ^
   "} " ^
+  "try { python (Join-Path $pyDir 'comfy_to_ue.py') --ping-install 2>$null | Out-Null } catch {} " ^
   "Write-Host ''; " ^
   "Write-Host '============================================================================' -ForegroundColor Cyan; " ^
   "Write-Host '[ГОТОВО] AI PBR & Substance Studio успешно установлен в проект:' -ForegroundColor Green; " ^
