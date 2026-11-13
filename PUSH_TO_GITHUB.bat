@@ -10,10 +10,7 @@ git commit -m "Update AI PBR & Substance Studio client package and dynamic GPU c
 git branch -M main
 git remote -v | findstr "origin" >nul
 if errorlevel 1 (
-    echo.
-    echo [!] Укажите URL вашего репозитория GitHub (например: https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio.git):
-    set /p REPO_URL="GitHub Repo URL: "
-    git remote add origin "%REPO_URL%"
+    git remote add origin "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio.git"
 )
 git push -u origin main
 echo.

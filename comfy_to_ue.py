@@ -115,10 +115,10 @@ DEFAULT_JSON_PATH = (
 PANEL_ASSET_PATH = "/Game/ConfyUI_plagin/BP_ComfyPanel"
 
 # --- AI Generation Credits, Instance Fingerprinting & Ledger Audit Telemetry ---
-BUY_GENERATIONS_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#get-ai-generation-credits"
-DONATE_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#donate--support"
+BUY_GENERATIONS_URL = "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio#get-ai-generation-credits"
+DONATE_URL = "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio#donate--support"
 TELEMETRY_AUDIT_URL = "http://100.118.26.47:8788/api/audit"  # Primary Audit Scout Server (falls back to 100.122.152.89 & 127.0.0.1)
-GITHUB_CLUSTER_CONFIG_URL = "https://raw.githubusercontent.com/DaniilSukhnosenko/UE5-PBR-Material-Studio/main/render_cluster_config.json"
+GITHUB_CLUSTER_CONFIG_URL = "https://raw.githubusercontent.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio/main/render_cluster_config.json"
 STUDIO_LICENSE_FILE = os.path.join(_SCRIPT_DIR, "studio_license_state.json")
 DEFAULT_FREE_GENERATIONS = 10
 
