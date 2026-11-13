@@ -1,22 +1,3 @@
-# =============================================================================
-# UE5 ArchViz & GameDev PBR Material Studio (Public Beta Edition)
-# Author: Daniil Sukhnosenko (d.sukhnosenko@lunas.pro)
-# Copyright (c) 2026 Daniil Sukhnosenko. All rights reserved.
-#
-# In-Engine Material & Mesh Studio for Unreal Engine 5:
-# - Polygon ID Raycast & Multi-Material Slot Assignment (Single / Quad / Coplanar / Seam Loop)
-# - 4-Layer Corona-Style Material Mixer (Height Blend, Procedural & Painted Masks)
-# - Substance-Style Procedural Tile & Brick Seams, Waviness, Row Shift & Bevel Normals
-# - Anti-Tiling Studio (Dual-Scale Rotated Blend, Macro Variation, Triplanar World-Aligned)
-# - 4-Channel (R/G/B/A) Texture Color & Vertex Mesh Paint Studio with Independent X/Y Tiling
-# - 1-Click Deferred Decal Converter & Viewport Raycast Decal Spawner
-# - Geometric 3D Mesh Subdivision + WPO Displacement & Parallax Occlusion with Contact Shadows
-# - Smart Material Preset Library & Batch Material Pack Exporter
-#
-# Note: Cloud AI PBR Texture Generation (Ubisoft CHORD / DepthAnything V2) is in Closed Beta.
-# Contact Daniil Sukhnosenko on LinkedIn to request an Early Access API Key.
-# =============================================================================
-
 import builtins
 import json
 import math
@@ -68,26 +49,28 @@ CATEGORY_TO_MASTER_MATERIAL = {
 }
 DEFAULT_MASTER_MAT_NAME = "MM_ComfyPBR_Master"
 DEFAULT_MASTER_MAT_PATH = f"{DEFAULT_UE_FOLDER}/{DEFAULT_MASTER_MAT_NAME}"
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else r"D:\AI\PlagimUE_AI"
 DEFAULT_JSON_PATH = (
     os.path.join(_SCRIPT_DIR, "UE_plagin.json")
     if os.path.exists(os.path.join(_SCRIPT_DIR, "UE_plagin.json"))
-    else os.path.join(_SCRIPT_DIR, "UE_plagin.json")
+    else r"D:\AI\PlagimUE_AI\UE_plagin.json"
 )
 PANEL_ASSET_PATH = "/Game/ConfyUI_plagin/BP_ComfyPanel"
 
-# --- AI Generation Credits & Payment Redirect Configuration ---
+# --- AI Generation Credits & Payment / Donate Redirect Configuration ---
 BUY_GENERATIONS_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#get-ai-generation-credits"
+DONATE_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#donate--support"
 STUDIO_LICENSE_FILE = os.path.join(_SCRIPT_DIR, "studio_license_state.json")
 DEFAULT_FREE_GENERATIONS = 25
 
 
 def _load_studio_license_state() -> dict:
-    """Loads persistent generation credits, license key, and payment URL from studio_license_state.json."""
+    """Loads persistent generation credits, license key, payment URL, and donate URL from studio_license_state.json."""
     default_state = {
         "credits": DEFAULT_FREE_GENERATIONS,
         "license_key": "",
         "buy_url": BUY_GENERATIONS_URL,
+        "donate_url": DONATE_URL,
         "enforce_limit": False,
         "redeemed_keys": [],
     }
@@ -147,20 +130,42 @@ def _get_generations_badge_color(credits: int) -> tuple:
 
 
 def refresh_generations_ui() -> None:
-    """Updates all Generations Counter labels in BP_ComfyPanel with color-coded balance."""
+    """Updates the Generations Counter label in BP_ComfyPanel with color-coded balance."""
     credits = get_remaining_generations()
     col = _get_generations_badge_color(credits)
-    for attr_name, text_fmt in (
-        ("_COMFY_GEN_COUNT_LBL", f"Generations: {credits} left"),
-        ("_COMFY_HDR_GEN_BADGE", f"Credits: {credits} Gens"),
-    ):
-        lbl = getattr(builtins, attr_name, None)
-        if lbl:
-            try:
-                lbl.set_text(text_fmt)
-                _style_text(lbl, size=8, bold=True, color=col)
-            except Exception:
-                pass
+    lbl = getattr(builtins, "_COMFY_GEN_COUNT_LBL", None)
+    if lbl:
+        try:
+            lbl.set_text(f"Generations: {credits} left")
+            _style_text(lbl, size=8, bold=True, color=col)
+        except Exception:
+            pass
+
+
+def open_donate_url() -> str:
+    """Opens the configured Donate / Support URL in the user's default web browser."""
+    st = _load_studio_license_state()
+    target_url = str(st.get("donate_url") or DONATE_URL).strip() or DONATE_URL
+    launched = False
+    try:
+        unreal.SystemLibrary.launch_url(target_url)
+        launched = True
+    except Exception:
+        pass
+    if not launched:
+        try:
+            import webbrowser
+            webbrowser.open(target_url)
+        except Exception:
+            pass
+    try:
+        _set_panel_status(
+            f"[Donate / Support] Thank you for supporting the project! Opened -> {target_url}",
+            color=(1.0, 0.62, 0.78, 1.0),
+        )
+    except Exception:
+        pass
+    return target_url
 
 
 def open_buy_generations_url() -> str:
@@ -7461,11 +7466,282 @@ def generate_displacement_in_comfy_for_active_mi(
     ue_folder: str = DEFAULT_UE_FOLDER,
     json_path: str = DEFAULT_JSON_PATH,
 ) -> bool:
-    """Public Beta stub: Cloud AI Displacement Map generation requires a Beta API Key."""
-    msg = "[Cloud AI Generation — Closed Beta] DM Daniil Sukhnosenko on LinkedIn for Beta Access! Use 'Apply' / 'Enable Nanite Disp' with existing Height maps."
-    unreal.log_warning(msg)
-    _set_panel_status(msg, "GENERATE PBR", color=(1.0, 0.78, 0.35, 1.0))
-    return False
+    """
+    Generates / regenerates a high-contrast 3D Displacement map (`T_<Name>_Height`) in ComfyUI
+    using `DepthAnything_V2` (`depth_anything_v2_vitl_fp16.safetensors`, fp32) from the `AlbedoTexture`
+    of the active Material Instance (on the cyan-highlighted viewport face or Base mtl), imports it
+    into UE5 (`sRGB=False`), assigns it to `HeightTexture`, and applies the active Displacement Mode.
+    """
+    if getattr(builtins, "_COMFY_JOB_RUNNING", False):
+        _set_panel_status(
+            "[...] ComfyUI generation is already running, please wait...",
+            "WAIT...",
+            color=(1.0, 0.80, 0.35, 1.0),
+        )
+        return
+
+    if not _check_can_generate_or_prompt_buy(1):
+        return False
+
+    ue_import_path = _normalize_ue_folder(ue_folder)
+    if ue_import_path.split("/")[-1].lower() in [c.lower() for c in MATERIAL_CATEGORIES]:
+        ue_import_path = "/".join(ue_import_path.split("/")[:-1]) or DEFAULT_UE_FOLDER
+
+    slot_id = _get_selected_poly_target_id(default_for_assign=-1)
+    pick = _pick_polygon_under_camera_ray()
+    if pick and pick.get("comp") is not None and pick.get("cur_gid") is not None:
+        if slot_id >= 0 or getattr(builtins, "_COMFY_POLY_AIM_ACTIVE", False):
+            slot_id = int(pick["cur_gid"])
+
+    target_mi = None
+    a_sub = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    for act in (a_sub.get_selected_level_actors() if a_sub else []):
+        for comp in act.get_components_by_class(unreal.StaticMeshComponent):
+            num_m = comp.get_num_materials()
+            if slot_id >= 0 and slot_id < num_m:
+                m_slot = comp.get_material(slot_id)
+                if isinstance(m_slot, unreal.MaterialInstanceConstant):
+                    target_mi = m_slot
+                    break
+        if target_mi:
+            break
+
+    if not target_mi:
+        target_mi = _get_active_layer_a_mi(ue_import_path)
+    if not target_mi or not isinstance(target_mi, unreal.MaterialInstanceConstant):
+        _set_panel_status("[!] Select an actor/face or Base mtl first to generate Displacement!", color=(1.0, 0.65, 0.35, 1.0))
+        return False
+
+    mel = unreal.MaterialEditingLibrary
+    alb_tex = mel.get_material_instance_texture_parameter_value(
+        target_mi, "AlbedoTexture", unreal.MaterialParameterAssociation.GLOBAL_PARAMETER
+    )
+    if not alb_tex:
+        _set_panel_status(f"[!] '{target_mi.get_name()}' has no AlbedoTexture!", color=(1.0, 0.65, 0.35, 1.0))
+        return False
+
+    comfy_input_dir = r"D:\AI\ComfyUI_windows_portable\ComfyUI\input"
+    os.makedirs(comfy_input_dir, exist_ok=True)
+    input_fname = f"comfy_disp_src_{target_mi.get_name()}.png"
+    exported_alb_path = os.path.join(comfy_input_dir, input_fname)
+
+    exp_task = unreal.AssetExportTask()
+    exp_task.object = alb_tex
+    exp_task.filename = exported_alb_path
+    exp_task.automated = True
+    exp_task.replace_identical = True
+    exp_task.prompt = False
+    if not unreal.Exporter.run_asset_export_task(exp_task) or not os.path.exists(exported_alb_path):
+        _set_panel_status("[!] Failed to export AlbedoTexture to ComfyUI input folder!", color=(1.0, 0.45, 0.45, 1.0))
+        return False
+
+    mi_short = target_mi.get_name()
+    stem = mi_short[3:] if mi_short.startswith("MI_") else mi_short
+    height_asset_name = f"T_{stem}_Height"
+    temp_dir = os.path.dirname(json_path) if os.path.exists(json_path) else comfy_input_dir
+
+    disp_workflow = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {
+                "image": input_fname,
+            },
+        },
+        "2": {
+            "class_type": "DownloadAndLoadDepthAnythingV2Model",
+            "inputs": {
+                "model": "depth_anything_v2_vitl_fp16.safetensors",
+                "precision": "fp32",
+            },
+        },
+        "3": {
+            "class_type": "DepthAnything_V2",
+            "inputs": {
+                "da_model": ["2", 0],
+                "images": ["1", 0],
+            },
+        },
+        "4": {
+            "class_type": "SaveImage",
+            "inputs": {
+                "filename_prefix": "api_regen_height",
+                "images": ["3", 0],
+            },
+        },
+    }
+
+    state = {
+        "done": False,
+        "error": None,
+        "local_path": None,
+        "start_time": time.time(),
+        "target_mi": target_mi,
+        "height_asset_name": height_asset_name,
+        "ue_import_path": ue_import_path,
+        "exported_alb_path": exported_alb_path,
+    }
+    builtins._COMFY_CANCEL_REQUESTED = False
+    builtins._COMFY_JOB_RUNNING = True
+    _set_panel_status(
+        f"[...] Generating Deep Displacement Map (DepthAnything V2) in ComfyUI for '{mi_short}'...",
+        "WAIT...",
+        color=(0.55, 0.88, 1.0, 1.0),
+    )
+
+    def _disp_worker():
+        try:
+            req = urllib.request.Request(
+                f"{COMFY_URL}/prompt",
+                data=json.dumps({"prompt": disp_workflow}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+            prompt_id = res_data["prompt_id"]
+
+            while True:
+                if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+                    state["error"] = "__CANCELLED__"
+                    break
+                if time.time() - state["start_time"] > 300:
+                    state["error"] = "ComfyUI displacement generation timed out (300 sec)"
+                    break
+                try:
+                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                        history = json.loads(h_resp.read().decode("utf-8"))
+                    if prompt_id in history:
+                        entry = history[prompt_id]
+                        st_info = entry.get("status", {})
+                        if st_info.get("status_str") == "error":
+                            state["error"] = f"ComfyUI error: {st_info}"
+                            break
+                        outputs = entry.get("outputs", {})
+                        for _nid, node_out in outputs.items():
+                            for image in node_out.get("images", []):
+                                fname = image["filename"]
+                                params = urllib.parse.urlencode(
+                                    {
+                                        "filename": fname,
+                                        "subfolder": image.get("subfolder", ""),
+                                        "type": image.get("type", "output"),
+                                    }
+                                )
+                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                local_path = os.path.join(temp_dir, f"{height_asset_name}.png")
+                                with open(local_path, "wb") as out_f:
+                                    out_f.write(img_bytes)
+                                _enhance_height_map_contrast_and_blend(
+                                    local_path,
+                                    macro_depth_png_path="",
+                                    albedo_png_path=exported_alb_path,
+                                )
+                                state["local_path"] = local_path
+                                break
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+        except Exception as e:
+            state["error"] = str(e)
+        finally:
+            state["done"] = True
+
+    threading.Thread(target=_disp_worker, daemon=True).start()
+    tick_box = {"handle": None, "last_sec": -1}
+
+    def _on_disp_tick(_delta_time: float):
+        if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+            if tick_box["handle"] is not None:
+                try:
+                    unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+                except Exception:
+                    pass
+                tick_box["handle"] = None
+            builtins._COMFY_JOB_RUNNING = False
+            return
+
+        elapsed = int(time.time() - state["start_time"])
+        if not state["done"]:
+            if elapsed != tick_box["last_sec"]:
+                tick_box["last_sec"] = elapsed
+                _set_panel_status(
+                    f"[...] ComfyUI DepthAnything V2 Displacement for '{mi_short}' ({elapsed}s)...",
+                    f"WAIT ({elapsed}s)",
+                    color=(1.0, 0.82, 0.35, 1.0),
+                )
+            return
+
+        if tick_box["handle"] is not None:
+            try:
+                unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+            except Exception:
+                pass
+            tick_box["handle"] = None
+        builtins._COMFY_ACTIVE_TICK_HANDLE = None
+        builtins._COMFY_JOB_RUNNING = False
+
+        try:
+            if os.path.exists(state["exported_alb_path"]):
+                os.remove(state["exported_alb_path"])
+        except Exception:
+            pass
+
+        if state["error"] or not state["local_path"]:
+            err = state["error"] or "No displacement map returned"
+            _set_panel_status(f"[Disp Error] {err}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+            return
+
+        try:
+            mi_parent_cat = state["target_mi"].get_path_name().split(".")[0].split("/")[-2].lower()
+            if mi_parent_cat not in [c.lower() for c in MATERIAL_CATEGORIES]:
+                mi_parent_cat = _detect_material_category(state["target_mi"].get_name())
+            tex_dest_folder = f"{state['ue_import_path']}/{TEXTURES_SUBFOLDER}/{mi_parent_cat}"
+            unreal.EditorAssetLibrary.make_directory(tex_dest_folder)
+
+            t = unreal.AssetImportTask()
+            t.filename = state["local_path"]
+            t.destination_path = tex_dest_folder
+            t.replace_existing = True
+            t.save = True
+            t.automated = True
+
+            asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+            if hasattr(asset_tools, "import_asset_tools_tasks"):
+                asset_tools.import_asset_tools_tasks([t])
+            else:
+                asset_tools.import_asset_tasks([t])
+
+            try:
+                os.remove(state["local_path"])
+            except Exception:
+                pass
+
+            h_ue_path = f"{tex_dest_folder}/{state['height_asset_name']}"
+            h_tex = unreal.EditorAssetLibrary.load_asset(h_ue_path)
+            if h_tex:
+                h_tex.set_editor_property("srgb", False)
+                unreal.EditorAssetLibrary.save_loaded_asset(h_tex)
+                mel.set_material_instance_texture_parameter_value(
+                    state["target_mi"],
+                    "HeightTexture",
+                    h_tex,
+                    unreal.MaterialParameterAssociation.GLOBAL_PARAMETER,
+                )
+                mel.update_material_instance(state["target_mi"])
+                unreal.EditorAssetLibrary.save_loaded_asset(state["target_mi"])
+
+            setup_nanite_displacement_on_selected(state["ue_import_path"])
+            _set_panel_status(
+                f"[ComfyUI Displacement Ready] Generated '{state['height_asset_name']}' ({elapsed}s) & applied to '{mi_short}'!",
+                "GENERATE PBR",
+                color=(0.45, 0.96, 0.65, 1.0),
+            )
+        except Exception as exc:
+            _set_panel_status(f"[Disp Import Error] {exc}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+
+    tick_box["handle"] = unreal.register_slate_post_tick_callback(_on_disp_tick)
+    builtins._COMFY_ACTIVE_TICK_HANDLE = tick_box["handle"]
+    return True
 
 
 def _pick_uv_under_camera_ray():
@@ -7638,7 +7914,7 @@ def paint_layer_mask_at_aimed_uv(
         pass
 
     import subprocess
-    py_exe = "python"
+    py_exe = r"D:\AI\ComfyUI_windows_portable\python_embeded\python.exe"
     if not os.path.exists(py_exe):
         py_exe = "python"
 
@@ -7913,7 +8189,7 @@ def load_material_preset_from_library(preset_name: str, ue_folder: str = DEFAULT
 def export_material_library_pack(ue_folder: str = DEFAULT_UE_FOLDER) -> str:
     """
     Batch-exports all Material Instances in /Game/Textures/ComfyUI and the Studio Library into a portable
-    JSON Material Pack (<PluginFolder>/Exported_Material_Pack.json) for cross-project sharing.
+    JSON Material Pack (D:/AI/PlagimUE_AI/Exported_Material_Pack.json) for cross-project sharing.
     """
     save_material_preset_to_library(ue_folder)
     lib = _load_preset_library_dict()
@@ -8797,24 +9073,23 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     )
 
     if not is_wt:
-        cur_gens_init = get_remaining_generations()
-        gen_badge_col = _get_generations_badge_color(cur_gens_init)
         hdr_gen_badge = _setup_named_label(
             w, is_wt, canvas, "HeaderGenerationsBadge",
-            f"Credits: {cur_gens_init} Gens",
+            "Support Indie Dev:",
             274.0, 4.0, 130.0, 14.0,
-            size=8, bold=True, color=gen_badge_col,
+            size=8, bold=True, color=(1.0, 0.72, 0.86, 1.0),
             apply_layout=True,
         )
-        hdr_buy_btn = _setup_named_button(
+        hdr_donate_btn = _setup_named_button(
             w, is_wt, canvas, "HeaderBuyGenBtn", "HeaderBuyGenBtnLabel",
-            "+ Buy Generations",
+            "Donate / Support",
             274.0, 18.0, 130.0, 20.0,
-            color=(1.0, 0.85, 0.32, 1.0),
+            color=(1.0, 0.58, 0.76, 1.0),
             apply_layout=True,
-            tooltip="Open payment page in browser to buy AI Generation credits or subscribe",
+            tooltip="Support the author with a donation (opens donation page in your browser)",
         )
         builtins._COMFY_HDR_GEN_BADGE = hdr_gen_badge
+        builtins._COMFY_HDR_DONATE_BTN = hdr_donate_btn
 
     # === Section 1: Prompt + Target Master Material Selector + GENERATE PBR / B&W MASK / STOP Buttons ===
     _setup_named_label(
@@ -8996,17 +9271,20 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
                 return
             open_buy_generations_url()
 
+        def _on_donate_clicked():
+            open_donate_url()
+
         _clear_delegate_safe(lic_key_box.on_text_committed)
         _clear_delegate_safe(buy_gens_btn.on_clicked)
-        _clear_delegate_safe(hdr_buy_btn.on_clicked)
+        _clear_delegate_safe(hdr_donate_btn.on_clicked)
         lic_key_box.on_text_committed.add_callable(_on_license_key_committed)
         buy_gens_btn.on_clicked.add_callable(_on_buy_generations_clicked)
-        hdr_buy_btn.on_clicked.add_callable(_on_buy_generations_clicked)
+        hdr_donate_btn.on_clicked.add_callable(_on_donate_clicked)
         builtins._COMFY_BTN_REFS.extend(
             [
                 (lic_key_box, _on_license_key_committed),
                 (buy_gens_btn, _on_buy_generations_clicked),
-                (hdr_buy_btn, _on_buy_generations_clicked),
+                (hdr_donate_btn, _on_donate_clicked),
             ]
         )
 
@@ -13676,16 +13954,6 @@ def _browse_reference_image_dialog() -> str:
     return ""
 
 
-def _notify_cloud_ai_closed_beta(feature_name: str = "AI PBR Generation") -> None:
-    panel = _get_open_panel_widget()
-    if getattr(builtins, "_COMFY_ENHANCED_WIDGET_ID", None) != id(panel):
-        panel = enhance_comfy_panel_ui(panel)
-    builtins._COMFY_JOB_RUNNING = False
-    msg = f"[{feature_name} — Closed Beta] Cloud AI generation is disabled in the public GitHub test build. DM Daniil Sukhnosenko on LinkedIn for a Beta Key!"
-    unreal.log_warning(msg)
-    _set_panel_status(msg, "GENERATE PBR", color=(1.0, 0.78, 0.35, 1.0))
-
-
 def run_reference_workflow(
     ref_image_path: str = "",
     ref_mode_label: str = "Seamless Img2Img + CHORD (5 Maps)",
@@ -13694,8 +13962,635 @@ def run_reference_workflow(
     folder_path: str = DEFAULT_UE_FOLDER,
     json_path: str = DEFAULT_JSON_PATH,
 ) -> None:
-    """Public Beta stub for Reference Image-to-PBR Cloud AI Generation."""
-    _notify_cloud_ai_closed_beta("Reference Photo-to-PBR")
+    """
+    Non-blocking generation of a seamless 5-map PBR Material in ComfyUI from a Reference Image:
+    - 'Seamless Img2Img + CHORD (5 Maps)': Pre-processes reference into a periodic de-lit tile ->
+      SDXL Circular VAE + SeamlessTile Img2Img -> Ubisoft CHORD 5-map decomposition.
+    - 'Direct CHORD from Photo (De-lit)': Pre-processes reference into a periodic de-lit tile ->
+      Ubisoft CHORD 5-map decomposition directly from photo.
+    - 'AI Vision Prompt + CHORD': Uses Gemini Vision to extract detailed surface prompt from photo ->
+      SDXL Seamless Text-to-PBR + Ubisoft CHORD.
+    """
+    panel = _get_open_panel_widget()
+    if getattr(builtins, "_COMFY_ENHANCED_WIDGET_ID", None) != id(panel):
+        panel = enhance_comfy_panel_ui(panel)
+
+    ref_clean = (ref_image_path or "").strip().strip('"')
+    if not ref_clean or not os.path.exists(ref_clean):
+        _set_panel_status(
+            "[!] Please select a valid Reference Image file via 'Browse...' or '<-' first!",
+            color=(1.0, 0.72, 0.3, 1.0),
+        )
+        return
+
+    if getattr(builtins, "_COMFY_JOB_RUNNING", False):
+        _set_panel_status(
+            "[...] A ComfyUI generation job is already running, please wait...",
+            color=(1.0, 0.80, 0.35, 1.0),
+        )
+        return
+
+    if not _check_can_generate_or_prompt_buy(1):
+        return
+
+    if "Direct CHORD" in ref_mode_label:
+        ref_mode = "chord_direct"
+    elif "AI Vision" in ref_mode_label:
+        ref_mode = "ai_vision_pbr"
+    else:
+        ref_mode = "img2img_seamless"
+
+    ue_import_path = _normalize_ue_folder(folder_path)
+    if ue_import_path.split("/")[-1].lower() in [c.lower() for c in MATERIAL_CATEGORIES] or ue_import_path.split("/")[-1] in (TEXTURES_SUBFOLDER, MASKS_SUBFOLDER):
+        ue_import_path = "/".join(ue_import_path.split("/")[:-1]) or DEFAULT_UE_FOLDER
+    _ensure_folder_structure(ue_import_path)
+    selected_mm_path = _get_selected_prompt_master_material_path(ue_import_path)
+    res_px, res_tag = _get_selected_resolution()
+    _model_label, pipeline_mode, ckpt_name = _get_selected_pbr_model()
+
+    ref_stem = os.path.splitext(os.path.basename(ref_clean))[0]
+    slug = _make_slug(ref_stem) or "ref_mat"
+    seed_val = _get_selected_seed()
+    asset_base_name = f"Ref_{slug}_{res_tag}_S{seed_val % 100000}"
+    mm_low_r = selected_mm_path.lower()
+    if "decal" in mm_low_r:
+        mat_category = "Decal"
+    elif "glass" in mm_low_r:
+        mat_category = "Glass"
+    elif "foliage" in mm_low_r:
+        mat_category = "Foliage"
+    elif "fabric" in mm_low_r:
+        mat_category = "Fabric"
+    elif "emissive" in mm_low_r:
+        mat_category = "Light"
+    else:
+        mat_category = _detect_material_category(prompt_hint or ref_stem, prompt_hint or ref_stem)
+    builtins._COMFY_MASTER_MAT_PATH = selected_mm_path
+    pipe_short = "Ubisoft CHORD" if pipeline_mode == "chord" else "DepthAnything V2"
+
+    state = {
+        "done": False,
+        "error": None,
+        "downloaded": {},
+        "start_time": time.time(),
+        "ref_name": os.path.basename(ref_clean),
+        "ue_import_path": ue_import_path,
+        "selected_mm_path": selected_mm_path,
+        "asset_base_name": asset_base_name,
+        "mat_category": mat_category,
+        "res_px": res_px,
+        "res_tag": res_tag,
+        "pipe_short": pipe_short,
+        "is_single_leaf": False,
+        "seed_val": seed_val,
+    }
+    builtins._COMFY_CANCEL_REQUESTED = False
+    builtins._COMFY_JOB_RUNNING = True
+    _set_panel_status(
+        f"[...] Preparing Reference '{state['ref_name']}' ({ref_mode_label}, {res_px}x{res_px}, Seed: {seed_val})...",
+        color=(0.55, 0.88, 1.0, 1.0),
+    )
+
+    def _worker():
+        try:
+            plugin_dir = r"D:\AI\MyAiAssistant\Corona_ComfyUI_PBR_Plugin"
+            if plugin_dir not in sys.path and os.path.exists(plugin_dir):
+                sys.path.insert(0, plugin_dir)
+            import comfy_to_corona as c2c
+
+            if ref_mode == "ai_vision_pbr":
+                extracted = c2c.extract_materials_from_reference_image(ref_clean, target_hint=prompt_hint)
+                if not extracted:
+                    raise RuntimeError("AI Vision could not extract material description from reference image.")
+                first_mat = extracted[0]
+                prompt_en = str(first_mat.get("prompt_en") or prompt_hint or "seamless architectural texture")
+                cat_raw = str(first_mat.get("category") or "").strip().capitalize()
+                if cat_raw in MATERIAL_CATEGORIES:
+                    state["mat_category"] = cat_raw
+                workflow = c2c._build_txt2pbr_workflow(
+                    prompt_en=prompt_en,
+                    res_px=res_px,
+                    pipeline_mode=pipeline_mode,
+                    ckpt_name=ckpt_name,
+                )
+            else:
+                pre_path = c2c.preprocess_reference_for_seamless(ref_clean, target_size=1024)
+                uploaded_name = c2c.upload_image_to_comfy(pre_path)
+                prompt_en = (
+                    _translate_or_clean_prompt(prompt_hint)
+                    if (prompt_hint or "").strip()
+                    else "homogeneous architectural surface texture, uniform flat lighting, consistent natural micro-relief"
+                )
+                workflow = c2c._build_reference_pbr_workflow(
+                    uploaded_comfy_filename=uploaded_name,
+                    ref_mode=ref_mode,
+                    prompt_en=prompt_en,
+                    denoise=float(denoise),
+                    res_px=res_px,
+                    pipeline_mode=pipeline_mode,
+                    ckpt_name=ckpt_name,
+                )
+
+            for _nid, _ndata in workflow.items():
+                _inp = _ndata.get("inputs", {})
+                if "seed" in _inp:
+                    _inp["seed"] = seed_val
+
+            req = urllib.request.Request(
+                f"{COMFY_URL}/prompt",
+                data=json.dumps({"prompt": workflow}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+            prompt_id = res_data["prompt_id"]
+
+            while True:
+                if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+                    state["error"] = "__CANCELLED__"
+                    break
+                if time.time() - state["start_time"] > 600:
+                    state["error"] = "ComfyUI reference generation timed out (600 sec)"
+                    break
+
+                try:
+                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                        history = json.loads(h_resp.read().decode("utf-8"))
+                    if prompt_id in history:
+                        entry = history[prompt_id]
+                        st_info = entry.get("status", {})
+                        if st_info.get("status_str") == "error":
+                            state["error"] = f"ComfyUI internal error: {st_info}"
+                            break
+
+                        outputs = entry.get("outputs", {})
+                        temp_dir = os.path.dirname(json_path)
+                        node_to_kind = {
+                            "76": "albedo",
+                            "80": "height",
+                            "82": "normal",
+                            "85": "roughness",
+                            "86": "metallic",
+                            "87": "depth_macro",
+                            "91": "albedo",
+                            "92": "height",
+                            "93": "normal",
+                            "94": "roughness",
+                            "95": "metallic",
+                            "98": "leaf_source",
+                        }
+                        for nid, node_out in outputs.items():
+                            for image in node_out.get("images", []):
+                                fname = image["filename"]
+                                kind = node_to_kind.get(str(nid))
+                                if not kind:
+                                    low_f = fname.lower()
+                                    if "normal" in low_f:
+                                        kind = "normal"
+                                    elif "rough" in low_f:
+                                        kind = "roughness"
+                                    elif "height" in low_f:
+                                        kind = "height"
+                                    elif "metal" in low_f:
+                                        kind = "metallic"
+                                    elif "leaf_source" in low_f:
+                                        kind = "leaf_source"
+                                    elif "depth_macro" in low_f:
+                                        kind = "depth_macro"
+                                    else:
+                                        kind = "albedo"
+
+                                params = urllib.parse.urlencode(
+                                    {
+                                        "filename": fname,
+                                        "subfolder": image.get("subfolder", ""),
+                                        "type": image.get("type", "output"),
+                                    }
+                                )
+                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                clean_filename = f"T_{asset_base_name}_{kind.capitalize()}.png"
+                                local_path = os.path.join(temp_dir, clean_filename)
+                                with open(local_path, "wb") as out_f:
+                                    out_f.write(img_bytes)
+                                state["downloaded"][kind] = local_path
+
+                        macro_p = state["downloaded"].pop("depth_macro", "")
+                        hgt_main_p = state["downloaded"].get("height", "")
+                        alb_main_p = state["downloaded"].get("albedo", "")
+                        if hgt_main_p and os.path.exists(hgt_main_p):
+                            _enhance_height_map_contrast_and_blend(
+                                hgt_main_p,
+                                macro_depth_png_path=macro_p,
+                                albedo_png_path=alb_main_p,
+                            )
+                        if macro_p and os.path.exists(macro_p):
+                            try:
+                                os.remove(macro_p)
+                            except Exception:
+                                pass
+
+                        if state.get("is_single_leaf"):
+                            leaf_src_p = state["downloaded"].pop("leaf_source", "")
+                            alb_p = state["downloaded"].get("albedo", "")
+                            nrm_p = state["downloaded"].get("normal", "")
+                            hgt_p = state["downloaded"].get("height", "")
+                            opac_p = os.path.join(temp_dir, f"T_{asset_base_name}_Opacity.png")
+                            if _extract_leaf_opacity_and_bleed_edges(leaf_src_p, alb_p, opac_p, nrm_p, hgt_p):
+                                state["downloaded"]["opacity"] = opac_p
+                            if leaf_src_p and os.path.exists(leaf_src_p):
+                                try:
+                                    os.remove(leaf_src_p)
+                                except Exception:
+                                    pass
+                        elif str(state.get("mat_category", "")).lower() == "decal":
+                            alb_p = state["downloaded"].get("albedo", "")
+                            hgt_p = state["downloaded"].get("height", "")
+                            opac_p = os.path.join(temp_dir, f"T_{asset_base_name}_Opacity.png")
+                            if _extract_decal_opacity_and_bleed_edges(alb_p, opac_p, hgt_p, state.get("prompt_en", "")):
+                                state["downloaded"]["opacity"] = opac_p
+
+                        try:
+                            _enforce_seamless_pbr_maps(
+                                state["downloaded"],
+                                is_cutout_or_decal=bool(
+                                    state.get("is_single_leaf")
+                                    or str(state.get("mat_category", "")).lower() == "decal"
+                                ),
+                            )
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    pass
+                time.sleep(1.0)
+        except Exception as e:
+            state["error"] = str(e)
+        finally:
+            state["done"] = True
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    tick_box = {"handle": None, "last_sec": -1}
+
+    def _on_ref_slate_tick(_delta_time: float):
+        if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+            if tick_box["handle"] is not None:
+                try:
+                    unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+                except Exception:
+                    pass
+                tick_box["handle"] = None
+            builtins._COMFY_JOB_RUNNING = False
+            return
+
+        elapsed = int(time.time() - state["start_time"])
+        if not state["done"]:
+            if elapsed != tick_box["last_sec"]:
+                tick_box["last_sec"] = elapsed
+                _set_panel_status(
+                    f"[...] Generating PBR from Reference '{state['ref_name']}' ({state['res_px']}x{state['res_px']}, {elapsed}s)...",
+                    color=(1.0, 0.82, 0.35, 1.0),
+                )
+            return
+
+        if tick_box["handle"] is not None:
+            try:
+                unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+            except Exception:
+                pass
+            tick_box["handle"] = None
+        builtins._COMFY_ACTIVE_TICK_HANDLE = None
+        builtins._COMFY_JOB_RUNNING = False
+
+        if state["error"] == "__CANCELLED__":
+            _set_panel_status("[Cancelled] Reference generation stopped by user.", color=(1.0, 0.55, 0.40, 1.0))
+            return
+        if state["error"]:
+            unreal.log_error(f"ComfyUI Reference PBR Error: {state['error']}")
+            _set_panel_status(f"[Error] {state['error']}", color=(1.0, 0.40, 0.40, 1.0))
+            return
+
+        try:
+            tex_dest_folder = f"{ue_import_path}/{TEXTURES_SUBFOLDER}/{state['mat_category']}"
+            mat_dest_folder = f"{ue_import_path}/{state['mat_category']}"
+            unreal.EditorAssetLibrary.make_directory(tex_dest_folder)
+            unreal.EditorAssetLibrary.make_directory(mat_dest_folder)
+
+            tasks = []
+            kind_to_asset_name = {}
+            for kind, file_path in state["downloaded"].items():
+                t = unreal.AssetImportTask()
+                t.filename = file_path
+                t.destination_path = tex_dest_folder
+                t.replace_existing = True
+                t.save = True
+                t.automated = True
+                tasks.append(t)
+                kind_to_asset_name[kind] = os.path.splitext(os.path.basename(file_path))[0]
+
+            if tasks:
+                unreal.AssetToolsHelpers.get_asset_tools().import_asset_tools_tasks(tasks) if hasattr(
+                    unreal.AssetToolsHelpers.get_asset_tools(), "import_asset_tools_tasks"
+                ) else unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
+
+            tex_map = {}
+            for kind, a_name in kind_to_asset_name.items():
+                tex_obj = unreal.EditorAssetLibrary.load_asset(f"{tex_dest_folder}/{a_name}")
+                if tex_obj:
+                    tex_map[kind] = tex_obj
+                f_path = state["downloaded"].get(kind)
+                if f_path and os.path.exists(f_path):
+                    try:
+                        os.remove(f_path)
+                    except Exception:
+                        pass
+
+            mi_name = f"MI_{asset_base_name}"
+            mi_asset = _build_pbr_material_instance(
+                mat_dest_folder,
+                mi_name,
+                tex_map,
+                master_mat_path=state["selected_mm_path"],
+            )
+
+            try:
+                mi_clean_path = mi_asset.get_path_name().split(".")[0]
+                mi_short_name = mi_clean_path.split("/")[-1]
+                mi_map = getattr(builtins, "_COMFY_MI_MAP", {})
+                if not isinstance(mi_map, dict):
+                    mi_map = {}
+                mi_map[mi_short_name] = mi_clean_path
+                builtins._COMFY_MI_MAP = mi_map
+                la_c = getattr(builtins, "_COMFY_LAYER_A_COMBO", None)
+                if la_c:
+                    la_c.add_option(mi_short_name)
+                    la_c.set_selected_option(mi_short_name)
+                for rd in getattr(builtins, "_COMFY_CORONA_LAYER_ROWS", []):
+                    rd["mtl_combo"].add_option(mi_short_name)
+                _sync_spinboxes_from_mi(mi_asset)
+            except Exception:
+                pass
+
+            applied_count = apply_material_to_selected_actors(mi_asset)
+            try:
+                unreal.EditorAssetLibrary.sync_browser_to_objects([mi_asset.get_path_name()])
+            except Exception:
+                pass
+
+            applied_msg = " and applied to actor!" if applied_count > 0 else ""
+            consume_generation_credit(1)
+            _set_panel_status(
+                f"[OK] Reference PBR Done in {elapsed}s! -> {state['mat_category']}/{mi_name}{applied_msg} (Gens left: {get_remaining_generations()})",
+                color=(0.45, 0.92, 0.60, 1.0),
+            )
+        except Exception as exc:
+            unreal.log_error(f"ComfyUI Reference Import Error: {traceback.format_exc()}")
+            _set_panel_status(f"[UE Error] {exc}", color=(1.0, 0.40, 0.40, 1.0))
+
+    tick_box["handle"] = unreal.register_slate_post_tick_callback(_on_ref_slate_tick)
+    builtins._COMFY_ACTIVE_TICK_HANDLE = tick_box["handle"]
+
+
+COMFY_EMBEDDED_PYTHON = r"D:\AI\ComfyUI_windows_portable\python_embeded\python.exe"
+
+
+def _is_single_leaf_cutout_prompt(prompt_raw: str, prompt_en: str = "") -> bool:
+    """Returns True if the prompt requests a single isolated leaf / twig with an alpha/opacity cutout mask."""
+    combined = f"{prompt_raw or ''} {prompt_en or ''}".lower()
+    return any(
+        k in combined
+        for k in (
+            "single isolated",
+            "single leaf",
+            "(cutout)",
+            "alpha cutout",
+            "leaf cutout",
+            "isolated leaf",
+            "один лист",
+            "одиночный лист",
+        )
+    )
+
+
+def _extract_leaf_opacity_and_bleed_edges(
+    source_img_path: str,
+    albedo_path: str,
+    opacity_out_path: str,
+    normal_path: str = "",
+    height_path: str = "",
+) -> bool:
+    """
+    Extracts a crisp botanical leaf contour Opacity Mask (T_<Name>_Opacity.png) from the isolated leaf image
+    (using exterior border flood-fill + chroma/luma segmentation + fenestration hole detection so interior dark veins
+    are 100% preserved while the outer contour and Monstera/fern splits are cleanly cut out), and performs 24px
+    iterative morphological color dilation (UV edge padding) on T_<Name>_Albedo.png to prevent black mipmap fringes.
+    """
+    import subprocess
+
+    py_exe = COMFY_EMBEDDED_PYTHON if os.path.exists(COMFY_EMBEDDED_PYTHON) else "python"
+    ref_path = source_img_path if (source_img_path and os.path.exists(source_img_path)) else albedo_path
+    if not ref_path or not os.path.exists(ref_path):
+        return False
+
+    script = r"""
+import sys, os, cv2, numpy as np
+
+ref_p, alb_p, opac_p, nrm_p, hgt_p = sys.argv[1:6]
+ref_img = cv2.imread(ref_p, cv2.IMREAD_COLOR)
+if ref_img is None:
+    sys.exit(1)
+
+h, w = ref_img.shape[:2]
+b, g, r = cv2.split(ref_img)
+max_c = np.maximum(np.maximum(r, g), b)
+min_c = np.minimum(np.minimum(r, g), b)
+sat = max_c.astype(np.int16) - min_c.astype(np.int16)
+
+border_pixels = np.concatenate([ref_img[0, :], ref_img[-1, :], ref_img[:, 0], ref_img[:, -1]], axis=0)
+bg_med = np.median(border_pixels, axis=0)
+diff_bg = np.linalg.norm(ref_img.astype(np.float32) - bg_med.astype(np.float32), axis=2)
+
+# 1. Exterior background flood-fill from all 4 image borders
+bg_cand = ((diff_bg < 42.0) & (max_c < 58) & (sat < 35)).astype(np.uint8) * 255
+num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(bg_cand, connectivity=8)
+border_labels = set(np.unique(np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]])))
+border_labels.discard(0)
+ext_bg = np.isin(labels, list(border_labels))
+
+# 2. True deep interior fenestrations / splits (Monstera holes, gaps between fern leaflets or pine needles)
+deep_dark = ((diff_bg < 18.0) & (max_c < 24) & (sat < 18)).astype(np.uint8) * 255
+n_d, lbl_d, st_d, _ = cv2.connectedComponentsWithStats(deep_dark, connectivity=8)
+hole_labels = [i for i in range(1, n_d) if st_d[i, cv2.CC_STAT_AREA] >= 64]
+holes_bg = np.isin(lbl_d, hole_labels)
+
+fg_mask = (~(ext_bg | holes_bg)).astype(np.uint8) * 255
+
+# 3. Keep main botanical specimen component(s) and close any tiny interior vein pinholes (< 48px)
+n_fg, lbl_fg, st_fg, _ = cv2.connectedComponentsWithStats(fg_mask, connectivity=8)
+if n_fg > 1:
+    max_area = max(st_fg[i, cv2.CC_STAT_AREA] for i in range(1, n_fg))
+    keep_fg = [i for i in range(1, n_fg) if st_fg[i, cv2.CC_STAT_AREA] >= max(64, int(max_area * 0.02))]
+    fg_mask = (np.isin(lbl_fg, keep_fg)).astype(np.uint8) * 255
+
+# Close tiny pinholes inside leaf blade while preserving true fenestrations
+inv_fg = cv2.bitwise_not(fg_mask)
+n_inv, lbl_inv, st_inv, _ = cv2.connectedComponentsWithStats(inv_fg, connectivity=8)
+tiny_holes = [i for i in range(1, n_inv) if st_inv[i, cv2.CC_STAT_AREA] < 64]
+if tiny_holes:
+    fg_mask[np.isin(lbl_inv, tiny_holes)] = 255
+
+# 4. Erode 1px & anti-alias contour to eliminate any dark background fringe along leaf teeth/margins
+k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+fg_mask = cv2.erode(fg_mask, k3, iterations=1)
+fg_mask = cv2.GaussianBlur(fg_mask, (5, 5), 0)
+_, fg_mask_bin = cv2.threshold(fg_mask, 127, 255, cv2.THRESH_BINARY)
+cv2.imwrite(opac_p, fg_mask_bin)
+
+# 5. UV Edge Padding (Color Dilation) on Albedo so mipmaps and bilinear filtering have zero dark halo
+if alb_p and os.path.exists(alb_p):
+    alb_img = cv2.imread(alb_p, cv2.IMREAD_COLOR)
+    if alb_img is not None:
+        if alb_img.shape[:2] != (h, w):
+            fg_for_alb = cv2.resize(fg_mask_bin, (alb_img.shape[1], alb_img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        else:
+            fg_for_alb = fg_mask_bin
+        valid = (fg_for_alb > 127).astype(np.uint8)
+        # Erode valid seed by 2px so only pure interior leaf color bleeds outward
+        valid_seed = cv2.erode(valid, k3, iterations=2)
+        if np.any(valid_seed):
+            valid = valid_seed
+        dilated = alb_img.copy()
+        k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        for _ in range(16):
+            next_valid = cv2.dilate(valid, k5, iterations=1)
+            ring = (next_valid > 0) & (valid == 0)
+            if not np.any(ring):
+                break
+            dil_step = cv2.dilate(dilated, k5, iterations=1)
+            dilated[ring] = dil_step[ring]
+            valid = next_valid
+        # Fill remaining exterior background with median leaf border color
+        rem_bg = (valid == 0)
+        if np.any(rem_bg) and np.any(fg_for_alb > 127):
+            med_leaf = np.median(alb_img[fg_for_alb > 127], axis=0).astype(np.uint8)
+            dilated[rem_bg] = med_leaf
+        cv2.imwrite(alb_p, dilated)
+"""
+    try:
+        cflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        res = subprocess.run(
+            [py_exe, "-c", script, ref_path, albedo_path or "", opacity_out_path, normal_path or "", height_path or ""],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            creationflags=cflags,
+        )
+        return res.returncode == 0 and os.path.exists(opacity_out_path)
+    except Exception as exc:
+        unreal.log_warning(f"ComfyUI Leaf Opacity Cutout extraction error: {exc}")
+        return False
+
+
+def _extract_decal_opacity_and_bleed_edges(
+    albedo_path: str,
+    opacity_out_path: str,
+    height_path: str = "",
+    prompt_en: str = "",
+) -> bool:
+    """
+    Extracts a clean alpha/opacity mask (`opacity_out_path`, 0=transparent background, 255=opaque decal)
+    for ArchViz Decals (cracks, potholes, leaks, stains, puddles, markings) by comparing each pixel's
+    color and luminance against the 4-border background median, and bleeds interior decal colors outward
+    in `albedo_path` so translucent decal edges never show a white/gray background halo.
+    """
+    import subprocess
+
+    if not albedo_path or not os.path.exists(albedo_path):
+        return False
+    py_exe = COMFY_EMBEDDED_PYTHON if os.path.exists(COMFY_EMBEDDED_PYTHON) else "python"
+    script = r"""
+import sys, os, cv2, numpy as np
+
+alb_p, opac_p, hgt_p = sys.argv[1:4]
+alb = cv2.imread(alb_p, cv2.IMREAD_COLOR)
+if alb is None:
+    sys.exit(1)
+
+H, W = alb.shape[:2]
+alb_f = alb.astype(np.float32)
+
+# Sample 4 borders (margin=12px) to estimate background color & luminance
+m = max(4, min(16, H // 32))
+top = alb_f[:m, :, :].reshape(-1, 3)
+bot = alb_f[-m:, :, :].reshape(-1, 3)
+lft = alb_f[:, :m, :].reshape(-1, 3)
+rgt = alb_f[:, -m:, :].reshape(-1, 3)
+border_px = np.concatenate([top, bot, lft, rgt], axis=0)
+bg_med = np.median(border_px, axis=0)
+
+diff_rgb = np.linalg.norm(alb_f - bg_med, axis=2)
+lum = 0.114 * alb_f[:, :, 0] + 0.587 * alb_f[:, :, 1] + 0.299 * alb_f[:, :, 2]
+bg_lum = float(0.114 * bg_med[0] + 0.587 * bg_med[1] + 0.299 * bg_med[2])
+
+# Determine whether decal feature is darker than background (cracks, stains, oil) or brighter (paint markings)
+p5, p95 = np.percentile(lum, (5.0, 95.0))
+if (bg_lum - p5) >= (p95 - bg_lum):
+    lum_diff = np.clip(bg_lum - lum, 0.0, 255.0)
+else:
+    lum_diff = np.clip(lum - bg_lum, 0.0, 255.0)
+
+score = np.maximum(lum_diff * 1.35, diff_rgb * 0.85)
+s_p50, s_p98 = np.percentile(score, (55.0, 98.5))
+low_t = max(14.0, s_p50 + (s_p98 - s_p50) * 0.22)
+high_t = max(low_t + 12.0, s_p50 + (s_p98 - s_p50) * 0.68)
+
+alpha = np.clip((score - low_t) / max(high_t - low_t, 1.0), 0.0, 1.0)
+alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+
+# Smoothly fade outer 6% frame border so decal never clips at box edges
+yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+ux = np.minimum(xx / float(W), 1.0 - xx / float(W))
+uy = np.minimum(yy / float(H), 1.0 - yy / float(H))
+ed = np.minimum(ux, uy)
+border_fade = np.clip(ed / 0.06, 0.0, 1.0)
+alpha *= border_fade
+
+opac_u8 = np.clip(alpha * 255.0, 0.0, 255.0).astype(np.uint8)
+cv2.imwrite(opac_p, opac_u8)
+
+# Bleed interior decal colors outward into transparent background to eliminate white/gray edge halos
+fg_mask = (opac_u8 > 64).astype(np.uint8)
+if np.any(fg_mask):
+    k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    valid = fg_mask.copy()
+    dilated = alb.copy()
+    for _ in range(18):
+        next_v = cv2.dilate(valid, k5, iterations=1)
+        ring = (next_v > 0) & (valid == 0)
+        if not np.any(ring):
+            break
+        step = cv2.erode(dilated, k5, iterations=1) if (bg_lum - p5) >= (p95 - bg_lum) else cv2.dilate(dilated, k5, iterations=1)
+        dilated[ring] = step[ring]
+        valid = next_v
+    rem = (valid == 0)
+    if np.any(rem):
+        med_fg = np.median(alb[fg_mask > 0], axis=0).astype(np.uint8)
+        dilated[rem] = med_fg
+    cv2.imwrite(alb_p, dilated)
+"""
+    try:
+        cflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        res = subprocess.run(
+            [py_exe, "-c", script, albedo_path, opacity_out_path, height_path or ""],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            creationflags=cflags,
+        )
+        return res.returncode == 0 and os.path.exists(opacity_out_path)
+    except Exception as exc:
+        unreal.log_warning(f"ComfyUI Decal Opacity extraction error: {exc}")
+        return False
 
 
 def run_workflow(
@@ -13703,8 +14598,651 @@ def run_workflow(
     folder_path: str = DEFAULT_UE_FOLDER,
     json_path: str = DEFAULT_JSON_PATH,
 ) -> None:
-    """Public Beta stub for Text-to-PBR Cloud AI Generation."""
-    _notify_cloud_ai_closed_beta("Text-to-PBR")
+    """
+    Неблокирующий запуск генерации бесшовного PBR-материала в ComfyUI из BP_ComfyPanel
+    с назначением сгенерированных карт в выбранный Мастер-Материал (через Material Instance).
+    """
+    panel = _get_open_panel_widget()
+    if getattr(builtins, "_COMFY_ENHANCED_WIDGET_ID", None) != id(panel):
+        panel = enhance_comfy_panel_ui(panel)
+
+    if panel:
+        try:
+            if not (prompt_text or "").strip():
+                pb = panel.find_child_widget_by_name("PromptInput")
+                if pb:
+                    prompt_text = str(pb.get_text())
+            if not (folder_path or "").strip():
+                fb = panel.find_child_widget_by_name("PathInput")
+                if fb:
+                    folder_path = str(fb.get_text())
+        except Exception:
+            pass
+
+    if getattr(builtins, "_COMFY_JOB_RUNNING", False):
+        _set_panel_status(
+            "[...] PBR generation is already running in ComfyUI, please wait...",
+            "WAIT...",
+            color=(1.0, 0.80, 0.35, 1.0),
+        )
+        return
+
+    if not _check_can_generate_or_prompt_buy(1):
+        return
+
+    ue_import_path = _normalize_ue_folder(folder_path)
+    if ue_import_path.split("/")[-1].lower() in [c.lower() for c in MATERIAL_CATEGORIES] or ue_import_path.split("/")[-1] in (TEXTURES_SUBFOLDER, MASKS_SUBFOLDER):
+        ue_import_path = "/".join(ue_import_path.split("/")[:-1]) or DEFAULT_UE_FOLDER
+    _ensure_folder_structure(ue_import_path)
+    if getattr(builtins, "_COMFY_ACTIVE_PRESET_CAT", "") == "bw_mask":
+        bw_txts = {t_txt.strip().lower() for _t_lbl, t_txt in CATEGORY_PRESET_PROMPTS.get("bw_mask", []) if not _t_lbl.lower().startswith("decal")}
+        if (prompt_text or "").strip().lower() in bw_txts:
+            return run_mask_workflow(prompt_text=prompt_text, folder_path=folder_path, json_path=json_path)
+    selected_mm_path = _get_selected_prompt_master_material_path(ue_import_path)
+    res_px, res_tag = _get_selected_resolution()
+    model_label, pipeline_mode, ckpt_name = _get_selected_pbr_model()
+    prompt_en = _translate_or_clean_prompt(prompt_text)
+    is_single_leaf = _is_single_leaf_cutout_prompt(prompt_text, prompt_en)
+    mm_low = selected_mm_path.lower()
+    if is_single_leaf:
+        mat_category = "Foliage"
+        selected_mm_path = f"{DEFAULT_UE_FOLDER}/MM_ArchViz_Foliage"
+    elif "decal" in mm_low:
+        mat_category = "Decal"
+    elif "glass" in mm_low:
+        mat_category = "Glass"
+    elif "foliage" in mm_low:
+        mat_category = "Foliage"
+    elif "fabric" in mm_low:
+        mat_category = "Fabric"
+    elif "emissive" in mm_low:
+        mat_category = "Light"
+    else:
+        mat_category = _detect_material_category(prompt_text, prompt_en)
+    builtins._COMFY_PROMPT_MASTER_MAT_PATH = selected_mm_path
+    builtins._COMFY_MASTER_MAT_PATH = selected_mm_path
+    mm_short_n = selected_mm_path.split("/")[-1]
+    builtins._COMFY_SYNCING_UI = True
+    try:
+        p_mm_c = getattr(builtins, "_COMFY_PROMPT_MM_COMBO", None)
+        if p_mm_c:
+            p_mm_c.add_option(mm_short_n)
+            p_mm_c.set_selected_option(mm_short_n)
+        mm_c = getattr(builtins, "_COMFY_MASTER_COMBO", None)
+        if mm_c:
+            mm_c.add_option(mm_short_n)
+            mm_c.set_selected_option(mm_short_n)
+    except Exception:
+        pass
+    finally:
+        builtins._COMFY_SYNCING_UI = False
+    slug = _make_slug(prompt_en)
+    seed_val = _get_selected_seed()
+    asset_base_name = f"{slug}_{res_tag}_S{seed_val % 100000}"
+
+    if not os.path.exists(json_path):
+        msg = f"[Error] Workflow file not found: {json_path}"
+        unreal.log_error(msg)
+        _set_panel_status(msg, "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+        return
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            workflow = json.load(f)
+
+        # Set selected base Text-to-Image checkpoint (RealVisXL V5.0 or SDXL Base 1.0)
+        if "71" in workflow and "inputs" in workflow["71"]:
+            workflow["71"]["inputs"]["ckpt_name"] = ckpt_name
+
+        if is_single_leaf:
+            # Disable circular edge tiling so the single leaf stays centered inside the frame with clean borders
+            if "101" in workflow and "inputs" in workflow["101"]:
+                workflow["101"]["inputs"]["tiling"] = "disable"
+            if "75" in workflow and "inputs" in workflow["75"]:
+                workflow["75"]["inputs"]["tiling"] = "disable"
+            full_positive = (
+                f"Top-down orthographic flat-lay botanical macro scan of a {prompt_en}, "
+                "centered single isolated botanical specimen filling 80 percent of frame, "
+                "completely isolated on a uniform solid pure pitch-black background (#000000), "
+                "razor-sharp leaf margin edges, crisp organic leaf venation, flat even studio lighting, "
+                "no cast shadows, 8k photorealistic PBR botanical asset"
+            )
+            full_negative = (
+                "overlapping leaves, multiple leaves, background clutter, soil, ground, branches in background, "
+                "white background, grey background, textured background, vignette, drop shadow, cast shadow, "
+                "perspective, angled view, 3d render, blurry edges, border touching frame, watermark, text"
+            )
+        elif mat_category.lower() == "decal":
+            if "101" in workflow and "inputs" in workflow["101"]:
+                workflow["101"]["inputs"]["tiling"] = "disable"
+            if "75" in workflow and "inputs" in workflow["75"]:
+                workflow["75"]["inputs"]["tiling"] = "disable"
+            full_positive = (
+                f"Top-down orthographic flat decal scan of {prompt_en}, "
+                "centered isolated decal feature surrounded by a clean uniform flat neutral background, "
+                "high contrast between decal detail and flat background, flat even studio lighting, "
+                "no cast shadows, 8k photorealistic PBR decal asset"
+            )
+            full_negative = (
+                "brick pattern, tiled grid, background clutter, vignette, drop shadow, cast shadow, "
+                "perspective, angled view, 3d render, border touching frame, watermark, text"
+            )
+        elif mat_category.lower() in ("tile", "brick") or any(
+            k in prompt_en.lower()
+            for k in (
+                "slab", "rings", "cross-section", "cross-cut", "end-grain", "stump",
+                "plywood edge", "veneer plies", "multi-layer", "butcher block", "paving blocks",
+                "osb", "chipboard", "pegboard", "glulam", "clt", "shou sugi ban", "charred",
+                "barnwood", "bark", "parquet", "herringbone", "chevron",
+                "soil", "mulch", "loam", "humus", "woodchip", "litter", "peat",
+            )
+        ):
+            full_positive = (
+                f"Top-down orthographic macro texture scan of {prompt_en}, "
+                "uniform repeating micro-scale pattern, consistent element size and even luminosity across entire frame, "
+                "flat even diffused studio lighting, no shadows, photorealistic 8k PBR material, sharp micro-details"
+            )
+            full_negative = (
+                "large blotches, macro spots, uneven brightness, dark patches, bright patches, central motif, focal point, "
+                "perspective, angled view, 3d render, harsh shadows, directional lighting, "
+                "specular highlights, vignette, depth of field, blurry, low quality, visible border, watermark, text"
+            )
+        else:
+            full_positive = (
+                f"Top-down orthographic macro texture scan of a continuous flat sheet of {prompt_en}, "
+                "single uninterrupted homogeneous surface, uniform fine-grained micro-scale texture, "
+                "consistent brightness and color across entire frame, no tiles, no seams, flat even diffused studio lighting, "
+                "no shadows, photorealistic 8k PBR material, sharp micro-details"
+            )
+            full_negative = (
+                "large blotches, giant pattern, macro spots, uneven lighting, dark patches, bright patches, central motif, focal point, "
+                "tiles, tiled wall, brick pattern, grid, panels, joints, grout lines, bevels, cracks, slits, "
+                "perspective, angled view, 3d render, harsh shadows, directional lighting, "
+                "specular highlights, vignette, depth of field, blurry, low quality, seam, visible border, watermark, text"
+            )
+
+        if "72" in workflow and "inputs" in workflow["72"]:
+            workflow["72"]["inputs"]["text"] = full_positive
+        if "73" in workflow and "inputs" in workflow["73"]:
+            workflow["73"]["inputs"]["text"] = full_negative
+
+        # SDXL and Ubisoft CHORD both work natively at 1024x1024 (CHORD internally resizes any input to 1024),
+        # so we always generate at 1024 and only downscale the final maps for 512 (faster & sharper than a 512 latent).
+        base_latent_res = 1024
+        if "77" in workflow and "inputs" in workflow["77"]:
+            workflow["77"]["inputs"]["width"] = base_latent_res
+            workflow["77"]["inputs"]["height"] = base_latent_res
+
+        if pipeline_mode == "chord":
+            # Ubisoft CHORD PBR Decomposition Pipeline (ChordLoadModel -> ChordMaterialEstimation -> ChordNormalToHeight)
+            for old_id in ("78", "79", "81", "83", "84", "108", "109"):
+                workflow.pop(old_id, None)
+
+            # CHORD natively resizes all 5 outputs (basecolor, normal, roughness, metalness, height)
+            # to the resolution (ori_h, ori_w) of its input image while running its internal solver at 1024x1024.
+            chord_img_input = ["102", 0]
+            if res_px != 1024:
+                workflow["90"] = {
+                    "class_type": "ImageScale",
+                    "inputs": {
+                        "upscale_method": "nearest-exact" if res_px > 1024 else "area",
+                        "width": res_px,
+                        "height": res_px,
+                        "crop": "disabled",
+                        "image": ["102", 0],
+                    },
+                }
+                chord_img_input = ["90", 0]
+
+            if is_single_leaf:
+                workflow["98"] = {
+                    "class_type": "SaveImage",
+                    "inputs": {
+                        "filename_prefix": "api_leaf_source",
+                        "images": chord_img_input,
+                    },
+                }
+
+            workflow["110"] = {
+                "class_type": "ChordLoadModel",
+                "inputs": {
+                    "ckpt_name": "chord_v1.safetensors",
+                },
+            }
+            workflow["111"] = {
+                "class_type": "ChordMaterialEstimation",
+                "inputs": {
+                    "chord_model": ["110", 0],
+                    "image": chord_img_input,
+                },
+            }
+            workflow["112"] = {
+                "class_type": "ChordNormalToHeight",
+                "inputs": {
+                    "normal": ["111", 1],
+                },
+            }
+            if "76" in workflow and "inputs" in workflow["76"]:
+                workflow["76"]["inputs"]["images"] = ["111", 0]
+                workflow["76"]["inputs"]["filename_prefix"] = "api_albedo"
+            if "82" in workflow and "inputs" in workflow["82"]:
+                workflow["82"]["inputs"]["images"] = ["111", 1]
+                workflow["82"]["inputs"]["filename_prefix"] = "api_normal"
+            if "85" in workflow and "inputs" in workflow["85"]:
+                workflow["85"]["inputs"]["images"] = ["111", 2]
+                workflow["85"]["inputs"]["filename_prefix"] = "api_roughness"
+            if "80" in workflow and "inputs" in workflow["80"]:
+                workflow["80"]["inputs"]["images"] = ["112", 0]
+                workflow["80"]["inputs"]["filename_prefix"] = "api_height"
+            workflow["86"] = {
+                "class_type": "SaveImage",
+                "inputs": {
+                    "filename_prefix": "api_metallic",
+                    "images": ["111", 3],
+                },
+            }
+            # Run DepthAnything_V2 in parallel to fuse macro displacement with CHORD's micro normal-to-height
+            # (Skip extra ViT-L model load for Decals and Single-Leaf cutouts to avoid VRAM thrashing & 500s+ stalls)
+            if not is_single_leaf and str(mat_category).lower() != "decal":
+                workflow["79"] = {
+                    "class_type": "DownloadAndLoadDepthAnythingV2Model",
+                    "inputs": {
+                        "model": "depth_anything_v2_vitl_fp16.safetensors",
+                        "precision": "fp16",
+                    },
+                }
+                workflow["78"] = {
+                    "class_type": "DepthAnything_V2",
+                    "inputs": {
+                        "da_model": ["79", 0],
+                        "images": chord_img_input,
+                    },
+                }
+                workflow["87"] = {
+                    "class_type": "SaveImage",
+                    "inputs": {
+                        "filename_prefix": "api_depth_macro",
+                        "images": ["78", 0],
+                    },
+                }
+        else:
+            # Fast DepthAnything_V2 (fp16) + NormalMapSimple PBR Pipeline
+            if "78" in workflow and workflow["78"].get("class_type") == "MarigoldDepthEstimation":
+                workflow["79"] = {
+                    "class_type": "DownloadAndLoadDepthAnythingV2Model",
+                    "inputs": {
+                        "model": "depth_anything_v2_vitl_fp16.safetensors",
+                        "precision": "fp16",
+                    },
+                }
+                workflow["78"] = {
+                    "class_type": "DepthAnything_V2",
+                    "inputs": {
+                        "da_model": ["79", 0],
+                        "images": ["102", 0],
+                    },
+                }
+            if "81" in workflow and workflow["81"].get("class_type") == "NormalMapSimple":
+                workflow["81"]["inputs"]["scale_XY"] = 1.5
+
+            if res_px > 1024:
+                detail_res = min(res_px, 2048)
+                workflow["90"] = {
+                    "class_type": "ImageScale",
+                    "inputs": {
+                        "upscale_method": "bicubic",
+                        "width": detail_res,
+                        "height": detail_res,
+                        "crop": "disabled",
+                        "image": ["75", 0],
+                    },
+                }
+                if "102" in workflow and "inputs" in workflow["102"]:
+                    workflow["102"]["inputs"]["images"] = ["90", 0]
+
+                if res_px > 2048:
+                    for scale_id, save_id in (("91", "76"), ("92", "80"), ("93", "82"), ("94", "85")):
+                        if save_id in workflow and "inputs" in workflow[save_id]:
+                            orig_img_input = workflow[save_id]["inputs"].get("images")
+                            if orig_img_input:
+                                workflow[scale_id] = {
+                                    "class_type": "ImageScale",
+                                    "inputs": {
+                                        "upscale_method": "bicubic",
+                                        "width": res_px,
+                                        "height": res_px,
+                                        "crop": "disabled",
+                                        "image": orig_img_input,
+                                    },
+                                }
+                                workflow[save_id]["inputs"]["images"] = [scale_id, 0]
+            elif res_px < 1024:
+                for scale_id, save_id in (("91", "76"), ("92", "80"), ("93", "82"), ("94", "85")):
+                    if save_id in workflow and "inputs" in workflow[save_id]:
+                        orig_img_input = workflow[save_id]["inputs"].get("images")
+                        if orig_img_input:
+                            workflow[scale_id] = {
+                                "class_type": "ImageScale",
+                                "inputs": {
+                                    "upscale_method": "area",
+                                    "width": res_px,
+                                    "height": res_px,
+                                    "crop": "disabled",
+                                    "image": orig_img_input,
+                                },
+                            }
+                            workflow[save_id]["inputs"]["images"] = [scale_id, 0]
+
+        for node_id, node_data in workflow.items():
+            inputs = node_data.get("inputs", {})
+            if "seed" in inputs:
+                inputs["seed"] = seed_val
+    except Exception as exc:
+        unreal.log_error(f"ComfyUI PBR: JSON preparation error: {exc}")
+        _set_panel_status(f"[JSON Error] {exc}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+        return
+
+    pipe_short = "Ubisoft CHORD" if pipeline_mode == "chord" else "DepthAnything V2"
+    state = {
+        "done": False,
+        "error": None,
+        "downloaded": {},
+        "start_time": time.time(),
+        "prompt_en": prompt_en,
+        "ue_import_path": ue_import_path,
+        "selected_mm_path": selected_mm_path,
+        "asset_base_name": asset_base_name,
+        "res_px": res_px,
+        "res_tag": res_tag,
+        "pipe_short": pipe_short,
+        "is_single_leaf": is_single_leaf,
+        "mat_category": mat_category,
+        "seed_val": seed_val,
+    }
+    builtins._COMFY_CANCEL_REQUESTED = False
+    builtins._COMFY_JOB_RUNNING = True
+    _set_panel_status(
+        f"[...] Sending {res_px}x{res_px} ({res_tag}) [{pipe_short}, Seed: {seed_val}] job to ComfyUI: '{prompt_en}'...",
+        "WAIT...",
+        color=(0.55, 0.85, 1.0, 1.0),
+    )
+
+    def _worker():
+        try:
+            req = urllib.request.Request(
+                f"{COMFY_URL}/prompt",
+                data=json.dumps({"prompt": workflow}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+            prompt_id = res_data["prompt_id"]
+
+            while True:
+                if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+                    state["error"] = "__CANCELLED__"
+                    break
+                if time.time() - state["start_time"] > 1800:
+                    state["error"] = "ComfyUI generation timed out (1800 sec)"
+                    break
+
+                try:
+                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                        history = json.loads(h_resp.read().decode("utf-8"))
+                    if prompt_id in history:
+                        entry = history[prompt_id]
+                        st_info = entry.get("status", {})
+                        if st_info.get("status_str") == "error":
+                            state["error"] = f"ComfyUI internal error: {st_info}"
+                            break
+
+                        outputs = entry.get("outputs", {})
+                        temp_dir = os.path.dirname(json_path)
+                        node_to_kind = {
+                            "76": "albedo",
+                            "80": "height",
+                            "82": "normal",
+                            "85": "roughness",
+                            "86": "metallic",
+                            "87": "depth_macro",
+                            "91": "albedo",
+                            "92": "height",
+                            "93": "normal",
+                            "94": "roughness",
+                            "95": "metallic",
+                            "98": "leaf_source",
+                        }
+                        for nid, node_out in outputs.items():
+                            for image in node_out.get("images", []):
+                                fname = image["filename"]
+                                kind = node_to_kind.get(str(nid))
+                                if not kind:
+                                    low_f = fname.lower()
+                                    if "normal" in low_f:
+                                        kind = "normal"
+                                    elif "rough" in low_f:
+                                        kind = "roughness"
+                                    elif "height" in low_f:
+                                        kind = "height"
+                                    elif "metal" in low_f:
+                                        kind = "metallic"
+                                    elif "leaf_source" in low_f:
+                                        kind = "leaf_source"
+                                    elif "depth_macro" in low_f:
+                                        kind = "depth_macro"
+                                    else:
+                                        kind = "albedo"
+
+                                params = urllib.parse.urlencode(
+                                    {
+                                        "filename": fname,
+                                        "subfolder": image.get("subfolder", ""),
+                                        "type": image.get("type", "output"),
+                                    }
+                                )
+                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                clean_filename = f"T_{asset_base_name}_{kind.capitalize()}.png"
+                                local_path = os.path.join(temp_dir, clean_filename)
+                                with open(local_path, "wb") as out_f:
+                                    out_f.write(img_bytes)
+                                state["downloaded"][kind] = local_path
+
+                        macro_p = state["downloaded"].pop("depth_macro", "")
+                        hgt_main_p = state["downloaded"].get("height", "")
+                        alb_main_p = state["downloaded"].get("albedo", "")
+                        if hgt_main_p and os.path.exists(hgt_main_p):
+                            _enhance_height_map_contrast_and_blend(
+                                hgt_main_p,
+                                macro_depth_png_path=macro_p,
+                                albedo_png_path=alb_main_p,
+                            )
+                        if macro_p and os.path.exists(macro_p):
+                            try:
+                                os.remove(macro_p)
+                            except Exception:
+                                pass
+
+                        if state.get("is_single_leaf"):
+                            leaf_src_p = state["downloaded"].pop("leaf_source", "")
+                            alb_p = state["downloaded"].get("albedo", "")
+                            nrm_p = state["downloaded"].get("normal", "")
+                            hgt_p = state["downloaded"].get("height", "")
+                            opac_p = os.path.join(temp_dir, f"T_{asset_base_name}_Opacity.png")
+                            if _extract_leaf_opacity_and_bleed_edges(leaf_src_p, alb_p, opac_p, nrm_p, hgt_p):
+                                state["downloaded"]["opacity"] = opac_p
+                            if leaf_src_p and os.path.exists(leaf_src_p):
+                                try:
+                                    os.remove(leaf_src_p)
+                                except Exception:
+                                    pass
+                        elif str(state.get("mat_category", "")).lower() == "decal":
+                            alb_p = state["downloaded"].get("albedo", "")
+                            hgt_p = state["downloaded"].get("height", "")
+                            opac_p = os.path.join(temp_dir, f"T_{asset_base_name}_Opacity.png")
+                            if _extract_decal_opacity_and_bleed_edges(alb_p, opac_p, hgt_p, state.get("prompt_en", "")):
+                                state["downloaded"]["opacity"] = opac_p
+                        try:
+                            _enforce_seamless_pbr_maps(
+                                state["downloaded"],
+                                is_cutout_or_decal=bool(
+                                    state.get("is_single_leaf")
+                                    or str(state.get("mat_category", "")).lower() == "decal"
+                                ),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            free_req = urllib.request.Request(
+                                f"{COMFY_URL}/free",
+                                data=b'{"unload_models": false, "free_memory": true}',
+                                headers={"Content-Type": "application/json"},
+                                method="POST",
+                            )
+                            urllib.request.urlopen(free_req, timeout=3.0).read()
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    pass
+                time.sleep(1.0)
+        except Exception as e:
+            state["error"] = str(e)
+        finally:
+            state["done"] = True
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    tick_box = {"handle": None, "last_sec": -1}
+
+    def _on_slate_tick(_delta_time: float):
+        if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+            if tick_box["handle"] is not None:
+                try:
+                    unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+                except Exception:
+                    pass
+                tick_box["handle"] = None
+            builtins._COMFY_JOB_RUNNING = False
+            return
+
+        elapsed = int(time.time() - state["start_time"])
+        if not state["done"]:
+            if elapsed != tick_box["last_sec"]:
+                tick_box["last_sec"] = elapsed
+                _set_panel_status(
+                    f"[...] Generating {state['res_px']}x{state['res_px']} ({state['res_tag']}) PBR in ComfyUI: '{prompt_en[:42]}' ({elapsed}s)...",
+                    f"WAIT ({elapsed}s)",
+                    color=(1.0, 0.82, 0.35, 1.0),
+                )
+            return
+
+        if tick_box["handle"] is not None:
+            try:
+                unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+            except Exception:
+                pass
+            tick_box["handle"] = None
+        builtins._COMFY_ACTIVE_TICK_HANDLE = None
+
+        builtins._COMFY_JOB_RUNNING = False
+
+        if state["error"] == "__CANCELLED__":
+            _set_panel_status("[Cancelled] Generation stopped by user.", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
+            return
+        if state["error"]:
+            unreal.log_error(f"ComfyUI PBR Error: {state['error']}")
+            _set_panel_status(f"[Error] {state['error']}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+            return
+
+        try:
+            _set_panel_status(
+                f"[...] Importing PBR maps into {TEXTURES_SUBFOLDER}/{mat_category}/ and building Material Instance...",
+                "IMPORTING...",
+                color=(0.55, 0.85, 1.0, 1.0),
+            )
+            tex_dest_folder = f"{ue_import_path}/{TEXTURES_SUBFOLDER}/{mat_category}"
+            mat_dest_folder = f"{ue_import_path}/{mat_category}"
+            unreal.EditorAssetLibrary.make_directory(tex_dest_folder)
+            unreal.EditorAssetLibrary.make_directory(mat_dest_folder)
+
+            tasks = []
+            kind_to_asset_name = {}
+            for kind, file_path in state["downloaded"].items():
+                t = unreal.AssetImportTask()
+                t.filename = file_path
+                t.destination_path = tex_dest_folder
+                t.replace_existing = True
+                t.save = True
+                t.automated = True
+                tasks.append(t)
+                kind_to_asset_name[kind] = os.path.splitext(os.path.basename(file_path))[0]
+
+            if tasks:
+                unreal.AssetToolsHelpers.get_asset_tools().import_asset_tools_tasks(tasks) if hasattr(
+                    unreal.AssetToolsHelpers.get_asset_tools(), "import_asset_tools_tasks"
+                ) else unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
+
+            tex_map = {}
+            for kind, a_name in kind_to_asset_name.items():
+                tex_obj = unreal.EditorAssetLibrary.load_asset(f"{tex_dest_folder}/{a_name}")
+                if tex_obj:
+                    tex_map[kind] = tex_obj
+                f_path = state["downloaded"].get(kind)
+                if f_path and os.path.exists(f_path):
+                    try:
+                        os.remove(f_path)
+                    except Exception:
+                        pass
+
+            mi_name = f"MI_{asset_base_name}"
+            mi_asset = _build_pbr_material_instance(
+                mat_dest_folder,
+                mi_name,
+                tex_map,
+                master_mat_path=state["selected_mm_path"],
+            )
+
+            try:
+                mi_clean_path = mi_asset.get_path_name().split(".")[0]
+                mi_short_name = mi_clean_path.split("/")[-1]
+                mi_map = getattr(builtins, "_COMFY_MI_MAP", {})
+                if not isinstance(mi_map, dict):
+                    mi_map = {}
+                mi_map[mi_short_name] = mi_clean_path
+                builtins._COMFY_MI_MAP = mi_map
+                la_c = getattr(builtins, "_COMFY_LAYER_A_COMBO", None)
+                lb_c = getattr(builtins, "_COMFY_LAYER_B_COMBO", None)
+                if la_c:
+                    la_c.add_option(mi_short_name)
+                    la_c.set_selected_option(mi_short_name)
+                if lb_c:
+                    lb_c.add_option(mi_short_name)
+                _sync_spinboxes_from_mi(mi_asset)
+            except Exception:
+                pass
+
+            applied_count = apply_material_to_selected_actors(mi_asset)
+
+            try:
+                unreal.EditorAssetLibrary.sync_browser_to_objects([mi_asset.get_path_name()])
+            except Exception:
+                pass
+
+            mm_short = state["selected_mm_path"].split("/")[-1]
+            applied_msg = " and applied to actor!" if applied_count > 0 else ""
+            consume_generation_credit(1)
+            _set_panel_status(
+                f"[OK] Done in {elapsed}s! Textures -> {TEXTURES_SUBFOLDER}/{mat_category}/, Material -> {mat_category}/{mi_name}{applied_msg} (Gens left: {get_remaining_generations()})",
+                "GENERATE PBR",
+                color=(0.45, 0.92, 0.60, 1.0),
+            )
+            unreal.log(f"ComfyUI PBR: Successfully created Material Instance {mi_asset.get_path_name()} from {mm_short}.")
+        except Exception as exc:
+            unreal.log_error(f"ComfyUI PBR Import/Material Error: {traceback.format_exc()}")
+            _set_panel_status(f"[UE Error] {exc}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+
+    tick_box["handle"] = unreal.register_slate_post_tick_callback(_on_slate_tick)
+    builtins._COMFY_ACTIVE_TICK_HANDLE = tick_box["handle"]
 
 
 def run_mask_workflow(
@@ -13712,9 +15250,305 @@ def run_mask_workflow(
     folder_path: str = DEFAULT_UE_FOLDER,
     json_path: str = DEFAULT_JSON_PATH,
 ) -> None:
-    """Public Beta stub for B&W Blend Mask Cloud AI Generation."""
-    _notify_cloud_ai_closed_beta("AI Blend Mask")
+    """
+    Non-blocking generation of a single seamless Black & White (grayscale) mask texture in ComfyUI
+    without generating the other PBR maps (skips Height/Normal/Roughness nodes).
+    Automatically imports the mask into Textures/ (sRGB=False) and assigns it to BlendMaskTexture.
+    """
+    panel = _get_open_panel_widget()
+    if getattr(builtins, "_COMFY_ENHANCED_WIDGET_ID", None) != id(panel):
+        panel = enhance_comfy_panel_ui(panel)
 
+    if panel:
+        try:
+            if not (prompt_text or "").strip():
+                pb = panel.find_child_widget_by_name("PromptInput")
+                if pb:
+                    prompt_text = str(pb.get_text())
+            if not (folder_path or "").strip():
+                fb = panel.find_child_widget_by_name("PathInput")
+                if fb:
+                    folder_path = str(fb.get_text())
+        except Exception:
+            pass
+
+    if getattr(builtins, "_COMFY_JOB_RUNNING", False):
+        _set_panel_status(
+            "[...] ComfyUI generation is already running, please wait...",
+            "WAIT...",
+            color=(1.0, 0.80, 0.35, 1.0),
+        )
+        return
+
+    if not _check_can_generate_or_prompt_buy(1):
+        return
+
+    ue_import_path = _normalize_ue_folder(folder_path)
+    if ue_import_path.split("/")[-1].lower() in [c.lower() for c in MATERIAL_CATEGORIES] or ue_import_path.split("/")[-1] in (TEXTURES_SUBFOLDER, MASKS_SUBFOLDER):
+        ue_import_path = "/".join(ue_import_path.split("/")[:-1]) or DEFAULT_UE_FOLDER
+    _ensure_folder_structure(ue_import_path)
+    res_px, res_tag = _get_selected_resolution()
+    prompt_en = _translate_or_clean_prompt(prompt_text)
+    slug = _make_slug(prompt_en)
+    seed_val = _get_selected_seed()
+    mask_asset_name = f"T_Mask_{slug}_{res_tag}_S{seed_val % 100000}"
+
+    if not os.path.exists(json_path):
+        msg = f"[Error] Workflow file not found: {json_path}"
+        unreal.log_error(msg)
+        _set_panel_status(msg, "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+        return
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            workflow = json.load(f)
+
+        full_positive = (
+            f"Top-down orthographic seamless tileable black and white grayscale alpha mask of {prompt_en}, "
+            "high contrast monochrome stencil pattern, pure black and white values, flat studio map, 8k substance designer mask"
+        )
+        full_negative = (
+            "color, colorful, rgb, saturation, 3d render, perspective, angled view, directional lighting, "
+            "shadows, vignette, depth of field, blurry, watermark, text, border"
+        )
+
+        if "72" in workflow and "inputs" in workflow["72"]:
+            workflow["72"]["inputs"]["text"] = full_positive
+        if "73" in workflow and "inputs" in workflow["73"]:
+            workflow["73"]["inputs"]["text"] = full_negative
+
+        base_latent_res = 1024
+        if "77" in workflow and "inputs" in workflow["77"]:
+            workflow["77"]["inputs"]["width"] = base_latent_res
+            workflow["77"]["inputs"]["height"] = base_latent_res
+
+        # Strip out Height, Normal, Roughness, and Preview nodes so ComfyUI only computes the single B&W Mask
+        for unused_id in ("78", "79", "80", "81", "82", "84", "85", "108", "109"):
+            workflow.pop(unused_id, None)
+
+        # Keep node 83 (grayscale desaturation) from workflow or fallback to ImageToBW
+        if "83" not in workflow:
+            workflow["83"] = {
+                "class_type": "ImageToBW",
+                "inputs": {
+                    "image": ["102", 0],
+                    "channel": "luminance",
+                },
+            }
+        mask_source = ["83", 0]
+
+        if res_px != 1024:
+            workflow["90"] = {
+                "class_type": "ImageScale",
+                "inputs": {
+                    "upscale_method": "lanczos" if res_px > 1024 else "area",
+                    "width": res_px,
+                    "height": res_px,
+                    "crop": "disabled",
+                    "image": mask_source,
+                },
+            }
+            mask_source = ["90", 0]
+
+        if "76" in workflow and "inputs" in workflow["76"]:
+            workflow["76"]["inputs"]["images"] = mask_source
+            workflow["76"]["inputs"]["filename_prefix"] = "api_bw_mask"
+
+        for node_id, node_data in workflow.items():
+            inputs = node_data.get("inputs", {})
+            if "seed" in inputs:
+                inputs["seed"] = seed_val
+    except Exception as exc:
+        unreal.log_error(f"ComfyUI Mask JSON preparation error: {exc}")
+        _set_panel_status(f"[JSON Error] {exc}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+        return
+
+    state = {
+        "done": False,
+        "error": None,
+        "local_path": None,
+        "start_time": time.time(),
+        "prompt_en": prompt_en,
+        "ue_import_path": ue_import_path,
+        "mask_asset_name": mask_asset_name,
+        "res_px": res_px,
+        "res_tag": res_tag,
+        "seed_val": seed_val,
+    }
+    builtins._COMFY_CANCEL_REQUESTED = False
+    builtins._COMFY_JOB_RUNNING = True
+    _set_panel_status(
+        f"[...] Sending {res_px}x{res_px} B&W Mask [Seed: {seed_val}] job to ComfyUI: '{prompt_en}'...",
+        "WAIT...",
+        color=(0.55, 0.85, 1.0, 1.0),
+    )
+
+    def _mask_worker():
+        try:
+            req = urllib.request.Request(
+                f"{COMFY_URL}/prompt",
+                data=json.dumps({"prompt": workflow}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+            prompt_id = res_data["prompt_id"]
+
+            while True:
+                if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+                    state["error"] = "__CANCELLED__"
+                    break
+                if time.time() - state["start_time"] > 1800:
+                    state["error"] = "ComfyUI mask generation timed out (1800 sec)"
+                    break
+                try:
+                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                        history = json.loads(h_resp.read().decode("utf-8"))
+                    if prompt_id in history:
+                        entry = history[prompt_id]
+                        st_info = entry.get("status", {})
+                        if st_info.get("status_str") == "error":
+                            state["error"] = f"ComfyUI internal error: {st_info}"
+                            break
+                        outputs = entry.get("outputs", {})
+                        temp_dir = os.path.dirname(json_path)
+                        for _nid, node_out in outputs.items():
+                            for image in node_out.get("images", []):
+                                fname = image["filename"]
+                                params = urllib.parse.urlencode(
+                                    {
+                                        "filename": fname,
+                                        "subfolder": image.get("subfolder", ""),
+                                        "type": image.get("type", "output"),
+                                    }
+                                )
+                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                local_path = os.path.join(temp_dir, f"{mask_asset_name}.png")
+                                with open(local_path, "wb") as out_f:
+                                    out_f.write(img_bytes)
+                                state["local_path"] = local_path
+                                break
+                        break
+                except Exception:
+                    pass
+                time.sleep(1.0)
+        except Exception as e:
+            state["error"] = str(e)
+        finally:
+            state["done"] = True
+
+    threading.Thread(target=_mask_worker, daemon=True).start()
+
+    tick_box = {"handle": None, "last_sec": -1}
+
+    def _on_mask_tick(_delta_time: float):
+        if getattr(builtins, "_COMFY_CANCEL_REQUESTED", False):
+            if tick_box["handle"] is not None:
+                try:
+                    unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+                except Exception:
+                    pass
+                tick_box["handle"] = None
+            builtins._COMFY_JOB_RUNNING = False
+            return
+
+        elapsed = int(time.time() - state["start_time"])
+        if not state["done"]:
+            if elapsed != tick_box["last_sec"]:
+                tick_box["last_sec"] = elapsed
+                _set_panel_status(
+                    f"[...] Generating {state['res_px']}x{state['res_px']} B&W Mask in ComfyUI: '{prompt_en[:40]}' ({elapsed}s)...",
+                    f"WAIT ({elapsed}s)",
+                    color=(1.0, 0.82, 0.35, 1.0),
+                )
+            return
+
+        if tick_box["handle"] is not None:
+            try:
+                unreal.unregister_slate_post_tick_callback(tick_box["handle"])
+            except Exception:
+                pass
+            tick_box["handle"] = None
+        builtins._COMFY_ACTIVE_TICK_HANDLE = None
+
+        builtins._COMFY_JOB_RUNNING = False
+
+        if state["error"] == "__CANCELLED__":
+            _set_panel_status("[Cancelled] Mask generation stopped by user.", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
+            return
+        if state["error"] or not state["local_path"]:
+            err = state["error"] or "No mask image returned from ComfyUI"
+            unreal.log_error(f"ComfyUI B&W Mask Error: {err}")
+            _set_panel_status(f"[Error] {err}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+            return
+
+        try:
+            tex_dest_folder = f"{ue_import_path}/{MASKS_SUBFOLDER}"
+            unreal.EditorAssetLibrary.make_directory(tex_dest_folder)
+
+            t = unreal.AssetImportTask()
+            t.filename = state["local_path"]
+            t.destination_path = tex_dest_folder
+            t.replace_existing = True
+            t.save = True
+            t.automated = True
+
+            asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+            if hasattr(asset_tools, "import_asset_tools_tasks"):
+                asset_tools.import_asset_tools_tasks([t])
+            else:
+                asset_tools.import_asset_tasks([t])
+
+            try:
+                os.remove(state["local_path"])
+            except Exception:
+                pass
+
+            mask_ue_path = f"{tex_dest_folder}/{mask_asset_name}"
+            mask_tex = unreal.EditorAssetLibrary.load_asset(mask_ue_path)
+            if mask_tex:
+                mask_tex.set_editor_property("srgb", False)
+                unreal.EditorAssetLibrary.save_loaded_asset(mask_tex)
+
+                mk_map = getattr(builtins, "_COMFY_MASK_MAP", {})
+                if not isinstance(mk_map, dict):
+                    mk_map = {}
+                mk_map[mask_asset_name] = mask_ue_path
+                builtins._COMFY_MASK_MAP = mk_map
+                mk_combo = getattr(builtins, "_COMFY_MASK_COMBO", None)
+                if mk_combo:
+                    mk_combo.add_option(mask_asset_name)
+                    mk_combo.set_selected_option(mask_asset_name)
+
+                target_mi = _get_active_layer_a_mi(ue_import_path)
+                if target_mi:
+                    mel = unreal.MaterialEditingLibrary
+                    mel.set_material_instance_texture_parameter_value(
+                        target_mi,
+                        "BlendMaskTexture",
+                        mask_tex,
+                        unreal.MaterialParameterAssociation.GLOBAL_PARAMETER,
+                    )
+                    mel.update_material_instance(target_mi)
+                    unreal.EditorAssetLibrary.save_loaded_asset(target_mi)
+
+                try:
+                    unreal.EditorAssetLibrary.sync_browser_to_objects([mask_ue_path])
+                except Exception:
+                    pass
+
+            consume_generation_credit(1)
+            _set_panel_status(
+                f"[OK] B&W Mask ready in {elapsed}s -> {MASKS_SUBFOLDER}/{mask_asset_name} (Gens left: {get_remaining_generations()})!",
+                "GENERATE PBR",
+                color=(0.45, 0.92, 0.60, 1.0),
+            )
+        except Exception as exc:
+            unreal.log_error(f"ComfyUI Mask Import Error: {traceback.format_exc()}")
+            _set_panel_status(f"[UE Error] {exc}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+
+    tick_box["handle"] = unreal.register_slate_post_tick_callback(_on_mask_tick)
+    builtins._COMFY_ACTIVE_TICK_HANDLE = tick_box["handle"]
 
 
 def register_comfy_toolbar_button() -> None:
