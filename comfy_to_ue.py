@@ -57,20 +57,135 @@ DEFAULT_JSON_PATH = (
 )
 PANEL_ASSET_PATH = "/Game/ConfyUI_plagin/BP_ComfyPanel"
 
-# --- AI Generation Credits & Payment / Donate Redirect Configuration ---
+# --- AI Generation Credits, Instance Fingerprinting & Ledger Audit Telemetry ---
 BUY_GENERATIONS_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#get-ai-generation-credits"
 DONATE_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#donate--support"
+TELEMETRY_AUDIT_URL = ""  # Optional Cloudflare Worker / Webhook endpoint for global supply vs revenue audit
 STUDIO_LICENSE_FILE = os.path.join(_SCRIPT_DIR, "studio_license_state.json")
 DEFAULT_FREE_GENERATIONS = 25
 
 
+def get_instance_fingerprint() -> str:
+    """Returns a deterministic hardware-bound digital copy ID (e.g. 'PBR-8F3A91C2') for this installation."""
+    try:
+        import platform
+        import uuid
+        raw_hw = f"UE5_PBR_INSTANCE|{uuid.getnode()}|{platform.node()}|{platform.machine()}"
+        h_hex = hashlib.sha256(raw_hw.encode("utf-8")).hexdigest()[:8].upper()
+        return f"PBR-{h_hex[:4]}-{h_hex[4:8]}"
+    except Exception:
+        return "PBR-0000-0000"
+
+
+def _compute_verified_minted_credits(redeemed_keys: list) -> int:
+    """Computes the exact total credits legitimately unlocked by redeemed 12-word seeds & promo codes."""
+    promo_packs = {
+        "BETA25": 25,
+        "LINKEDIN25": 25,
+        "WELCOME50": 50,
+        "STUDIO100": 100,
+        "PRO500": 500,
+    }
+    tier_map = {
+        0: 10, 1: 25, 2: 50, 3: 100, 4: 250,
+        5: 500, 6: 1000, 7: 2500, 8: 5000, 9: 10000,
+    }
+    total_unlocked = DEFAULT_FREE_GENERATIONS
+    seen = set()
+    for k in (redeemed_keys or []):
+        ks = str(k).strip().upper()
+        if not ks or ks in seen:
+            continue
+        seen.add(ks)
+        if ks in promo_packs:
+            total_unlocked += promo_packs[ks]
+        elif ks.startswith("SEED12-"):
+            parts = ks.split("-")
+            if len(parts) == 3:
+                try:
+                    t_idx = int(parts[1], 16)
+                    total_unlocked += tier_map.get(t_idx, 0)
+                except Exception:
+                    pass
+    return total_unlocked
+
+
+def audit_ledger_integrity(state_dict: dict | None = None) -> dict:
+    """
+    Audits this digital copy's credit balance against its cryptographic history of redeemed keys & spent generations.
+    Detects if a copy somehow acquired unbacked credits without payment/keys.
+    """
+    st = state_dict if isinstance(state_dict, dict) else _load_studio_license_state()
+    inst_id = str(st.get("instance_id") or get_instance_fingerprint())
+    cur_credits = max(0, int(st.get("credits", DEFAULT_FREE_GENERATIONS)))
+    spent_credits = max(0, int(st.get("total_spent", 0)))
+    redeemed = list(st.get("redeemed_keys") or [])
+    legit_minted = _compute_verified_minted_credits(redeemed)
+    expected_max = max(0, legit_minted - spent_credits)
+    unaccounted = max(0, cur_credits - expected_max)
+    return {
+        "instance_id": inst_id,
+        "credits_remaining": cur_credits,
+        "legitimate_minted_total": legit_minted,
+        "paid_minted_total": max(0, legit_minted - DEFAULT_FREE_GENERATIONS),
+        "total_spent": spent_credits,
+        "expected_balance": expected_max,
+        "unaccounted_credits": unaccounted,
+        "anomaly_detected": unaccounted > 0,
+        "redeemed_keys": redeemed,
+    }
+
+
+def send_ledger_audit_heartbeat(event_type: str = "heartbeat", extra: dict | None = None) -> None:
+    """
+    Asynchronously sends a lightweight ledger audit ping to `telemetry_url` (if configured) so the owner can:
+    1. Compare Total Paid Revenue vs Total Credits in circulation across all digital copies (`instance_id`).
+    2. Immediately spot any copy (`instance_id`) with `anomaly_detected == True` or duplicated `SEED12-*` keys.
+    """
+    st = _load_studio_license_state()
+    audit_url = str(st.get("telemetry_url") or TELEMETRY_AUDIT_URL).strip()
+    report = audit_ledger_integrity(st)
+    report["event"] = event_type
+    report["timestamp"] = int(time.time())
+    if extra:
+        report.update(extra)
+    if not audit_url:
+        return
+
+    def _worker():
+        try:
+            req = urllib.request.Request(
+                audit_url,
+                data=json.dumps(report).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "UE5-PBR-Studio-Audit/1.0"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(resp_data, dict) and resp_data.get("action") == "clamp_to_legitimate":
+                st_latest = _load_studio_license_state()
+                st_latest["credits"] = int(resp_data.get("set_credits", report["expected_balance"]))
+                _save_studio_license_state(st_latest)
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        pass
+
+
 def _load_studio_license_state() -> dict:
-    """Loads persistent generation credits, license key, payment URL, and donate URL from studio_license_state.json."""
+    """Loads persistent generation credits, instance_id, license key, payment URL, and donate URL from studio_license_state.json."""
+    inst_id = get_instance_fingerprint()
     default_state = {
+        "instance_id": inst_id,
         "credits": DEFAULT_FREE_GENERATIONS,
+        "total_spent": 0,
         "license_key": "",
         "buy_url": BUY_GENERATIONS_URL,
         "donate_url": DONATE_URL,
+        "telemetry_url": TELEMETRY_AUDIT_URL,
         "enforce_limit": False,
         "redeemed_keys": [],
     }
@@ -81,6 +196,7 @@ def _load_studio_license_state() -> dict:
             if isinstance(data, dict):
                 for k, v in default_state.items():
                     data.setdefault(k, v)
+                data["instance_id"] = inst_id
                 return data
     except Exception:
         pass
@@ -305,6 +421,7 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
         st["credits"] = max(0, int(st.get("credits", 0))) + seed_credits
         _save_studio_license_state(st)
         refresh_generations_ui()
+        send_ledger_audit_heartbeat("seed_redeemed", {"redeemed_id": seed_id, "added_credits": seed_credits})
         return True, f"{seed_msg} (New Balance: {st['credits']} Gens)"
 
     # 2. Check short promo codes
@@ -326,6 +443,7 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
         st["credits"] = max(0, int(st.get("credits", 0))) + added
         _save_studio_license_state(st)
         refresh_generations_ui()
+        send_ledger_audit_heartbeat("promo_redeemed", {"redeemed_id": key_up, "added_credits": added})
         return True, f"Activated '{key_up}'! +{added} AI Generations added (Balance: {st['credits']} Gens)."
     st["license_key"] = key_clean
     _save_studio_license_state(st)
@@ -334,15 +452,17 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
 
 
 def consume_generation_credit(cost: int = 1) -> bool:
-    """Decrements generation counter by `cost` and updates the UI. Returns False if enforce_limit is active and balance < cost."""
+    """Decrements generation counter by `cost`, increments `total_spent`, updates the UI, and triggers an audit heartbeat."""
     st = _load_studio_license_state()
     cur = max(0, int(st.get("credits", DEFAULT_FREE_GENERATIONS)))
     if bool(st.get("enforce_limit", False)) and cur < cost:
         refresh_generations_ui()
         return False
     st["credits"] = max(0, cur - int(cost))
+    st["total_spent"] = max(0, int(st.get("total_spent", 0))) + int(cost)
     _save_studio_license_state(st)
     refresh_generations_ui()
+    send_ledger_audit_heartbeat("credit_consumed", {"cost": int(cost)})
     return True
 
 
