@@ -1,0 +1,28 @@
+Copyright (c) 2026 Daniil Sukhnosenko (hurling-shawl22@bravealias.com)
+All rights reserved.
+
+UE5 ArchViz & GameDev PBR Material Studio — Public Beta Evaluation License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to install,
+use, and evaluate the Software inside Unreal Engine 5 for personal, educational,
+and commercial 3D visualization / game development workflows, subject to the
+following conditions:
+
+1. Attribution & Authorship:
+   The above copyright notice, author attribution (Daniil Sukhnosenko), and this
+   permission notice shall be included in all copies or substantial portions of
+   the Software.
+
+2. No Redistribution or Resale as a Competing Plugin:
+   You may not resell, sublicense, repackage, or redistribute the Software source
+   code or UI Blueprint assets (`comfy_to_ue.py`, `BP_ComfyPanel.uasset`) as a
+   standalone commercial or paid plugin/tool without prior written permission
+   from the author. Assets, materials, meshes, and Unreal Engine scenes created
+   using the Software belong 100% to the user and may be used freely in commercial
+   projects.
+
+3. Disclaimer:
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
