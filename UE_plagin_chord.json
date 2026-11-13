@@ -1,0 +1,179 @@
+{
+  "71": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "SDXL\\realvisxlV50_v50Bakedvae.safetensors"
+    }
+  },
+  "101": {
+    "class_type": "SeamlessTile",
+    "inputs": {
+      "model": [
+        "71",
+        0
+      ],
+      "tiling": "enable",
+      "copy_model": "Modify in place"
+    }
+  },
+  "72": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "Top-down orthographic view of a seamless tileable oak wood parquet floor, flat even studio lighting, no shadows, photorealistic 8k PBR material, sharp micro-details",
+      "clip": [
+        "71",
+        1
+      ]
+    }
+  },
+  "73": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "perspective, angled view, 3d render, harsh shadows, directional lighting, specular highlights, vignette, depth of field, blurry, low quality, seam, visible border, watermark, text",
+      "clip": [
+        "71",
+        1
+      ]
+    }
+  },
+  "77": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "105": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 181744905526073,
+      "steps": 25,
+      "cfg": 5.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1.0,
+      "model": [
+        "101",
+        0
+      ],
+      "positive": [
+        "72",
+        0
+      ],
+      "negative": [
+        "73",
+        0
+      ],
+      "latent_image": [
+        "77",
+        0
+      ]
+    }
+  },
+  "75": {
+    "class_type": "CircularVAEDecode",
+    "inputs": {
+      "samples": [
+        "105",
+        0
+      ],
+      "vae": [
+        "71",
+        2
+      ],
+      "tiling": "enable"
+    }
+  },
+  "102": {
+    "class_type": "EnhanceDetail",
+    "inputs": {
+      "images": [
+        "75",
+        0
+      ],
+      "filter_radius": 2,
+      "sigma": 0.1,
+      "denoise": 0.05,
+      "detail_mult": 1.35
+    }
+  },
+  "76": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_albedo",
+      "images": [
+        "111",
+        0
+      ]
+    }
+  },
+  "80": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_height",
+      "images": [
+        "112",
+        0
+      ]
+    }
+  },
+  "82": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_normal",
+      "images": [
+        "111",
+        1
+      ]
+    }
+  },
+  "85": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_roughness",
+      "images": [
+        "111",
+        2
+      ]
+    }
+  },
+  "110": {
+    "class_type": "ChordLoadModel",
+    "inputs": {
+      "ckpt_name": "chord_v1.safetensors"
+    }
+  },
+  "111": {
+    "class_type": "ChordMaterialEstimation",
+    "inputs": {
+      "chord_model": [
+        "110",
+        0
+      ],
+      "image": [
+        "102",
+        0
+      ]
+    }
+  },
+  "112": {
+    "class_type": "ChordNormalToHeight",
+    "inputs": {
+      "normal": [
+        "111",
+        1
+      ]
+    }
+  },
+  "86": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_metallic",
+      "images": [
+        "111",
+        3
+      ]
+    }
+  }
+}

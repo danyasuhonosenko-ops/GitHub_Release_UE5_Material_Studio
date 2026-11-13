@@ -13,7 +13,63 @@ import urllib.request
 
 import unreal
 
-COMFY_URL = "http://127.0.0.1:8188"
+REMOTE_TAILSCALE_COMFY_URL = "http://100.118.26.47:8188"
+COMFY_URL = getattr(builtins, "_COMFY_SERVER_URL_OVERRIDE", REMOTE_TAILSCALE_COMFY_URL)
+
+# Obfuscated FastAPI Security Gateway API Key (XOR 0x5A)
+_COMFY_GW_TOKEN_OBF = (
+    10, 24, 8, 119, 29, 13, 119, 99, 28, 110, 27, 109, 25, 104, 31, 98,
+    24, 107, 30, 108, 106, 111, 105, 27, 110, 31, 99, 104, 25, 109, 24, 98,
+    30, 107, 28, 105, 31, 108, 27,
+)
+
+
+def _get_comfy_gateway_key() -> str:
+    return "".join(chr(b ^ 0x5A) for b in _COMFY_GW_TOKEN_OBF)
+
+
+def _comfy_headers(extra: dict | None = None) -> dict:
+    hdrs = {"X-PBR-Gateway-Key": _get_comfy_gateway_key()}
+    if extra:
+        hdrs.update(extra)
+    return hdrs
+
+
+def _comfy_get(url: str, timeout: float = 10.0):
+    req = urllib.request.Request(url, headers=_comfy_headers(), method="GET")
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def set_comfy_server_url(url: str) -> str:
+    """Switches the target ComfyUI server URL (e.g. 'http://127.0.0.1:8188' or 'http://100.118.26.47:8188') live without restarting UE5."""
+    global COMFY_URL
+    clean_url = (url or REMOTE_TAILSCALE_COMFY_URL).strip().rstrip("/")
+    COMFY_URL = clean_url
+    builtins._COMFY_SERVER_URL_OVERRIDE = clean_url
+    try:
+        st = _load_studio_license_state()
+        st["comfy_url"] = clean_url
+        _save_studio_license_state(st)
+    except Exception:
+        pass
+    try:
+        import comfy_pbr_to_corona as _c2c
+        _c2c.COMFY_URL = clean_url
+    except Exception:
+        pass
+    try:
+        send_ledger_audit_heartbeat("server_url_changed", {"comfy_url": clean_url})
+    except Exception:
+        pass
+    try:
+        _set_panel_status(
+            f"[ComfyUI Server] Switched render backend -> {COMFY_URL}",
+            color=(0.48, 0.96, 0.78, 1.0),
+        )
+    except Exception:
+        pass
+    return COMFY_URL
+
 DEFAULT_UE_FOLDER = "/Game/Textures/ComfyUI"
 TEXTURES_SUBFOLDER = "Textures"
 MASKS_SUBFOLDER = "Masks"
@@ -61,9 +117,10 @@ PANEL_ASSET_PATH = "/Game/ConfyUI_plagin/BP_ComfyPanel"
 # --- AI Generation Credits, Instance Fingerprinting & Ledger Audit Telemetry ---
 BUY_GENERATIONS_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#get-ai-generation-credits"
 DONATE_URL = "https://github.com/DaniilSukhnosenko/UE5-PBR-Material-Studio#donate--support"
-TELEMETRY_AUDIT_URL = "http://127.0.0.1:8788/api/audit"  # Audit Scout Dashboard / Cloudflare Worker endpoint
+TELEMETRY_AUDIT_URL = "http://100.118.26.47:8788/api/audit"  # Primary Audit Scout Server (falls back to 100.122.152.89 & 127.0.0.1)
+GITHUB_CLUSTER_CONFIG_URL = "https://raw.githubusercontent.com/DaniilSukhnosenko/UE5-PBR-Material-Studio/main/render_cluster_config.json"
 STUDIO_LICENSE_FILE = os.path.join(_SCRIPT_DIR, "studio_license_state.json")
-DEFAULT_FREE_GENERATIONS = 25
+DEFAULT_FREE_GENERATIONS = 10
 
 
 # Salted SHA-256 digests of promo codes (plaintext promo codes are never stored in source)
@@ -146,6 +203,13 @@ def _compute_verified_minted_credits(redeemed_keys: list) -> int:
                     total_unlocked += tier_map.get(t_idx, 0)
                 except Exception:
                     pass
+        elif ks.startswith(("REF-", "REFBONUS-")):
+            parts = ks.split("-")
+            if len(parts) >= 3:
+                try:
+                    total_unlocked += max(0, int(parts[-1]))
+                except Exception:
+                    pass
     return total_unlocked
 
 
@@ -164,6 +228,8 @@ def audit_ledger_integrity(state_dict: dict | None = None) -> dict:
     unaccounted = max(0, cur_credits - expected_max)
     return {
         "instance_id": inst_id,
+        "comfy_url": str(COMFY_URL or st.get("comfy_url") or REMOTE_TAILSCALE_COMFY_URL),
+        "referred_by": str(st.get("referred_by") or ""),
         "credits_remaining": cur_credits,
         "legitimate_minted_total": legit_minted,
         "paid_minted_total": max(0, legit_minted - DEFAULT_FREE_GENERATIONS),
@@ -184,6 +250,27 @@ def _apply_server_enforcement(target_credits: int) -> None:
     st_latest["total_spent"] = max(0, legit_total - target_c)
     _save_studio_license_state(st_latest)
     builtins._COMFY_PENDING_UI_REFRESH = True
+
+
+def _apply_server_referral_rewards(rewards_list: list) -> int:
+    """Grants automatic referral kickback rewards (`REFBONUS-<ID>-<CREDITS>`) pushed by the Audit Scout server to a referral source Copy ID."""
+    if not rewards_list:
+        return 0
+    st_latest = _load_studio_license_state()
+    redeemed = list(st_latest.get("redeemed_keys") or [])
+    added_total = 0
+    for rw in rewards_list:
+        rw_id = str(rw.get("id") or "").strip().upper()
+        rw_cr = max(0, int(rw.get("credits", 0)))
+        if rw_id and rw_cr > 0 and rw_id not in redeemed:
+            redeemed.append(rw_id)
+            added_total += rw_cr
+    if added_total > 0:
+        st_latest["redeemed_keys"] = redeemed
+        st_latest["credits"] = max(0, int(st_latest.get("credits", 0))) + added_total
+        _save_studio_license_state(st_latest)
+        builtins._COMFY_PENDING_UI_REFRESH = True
+    return added_total
 
 
 def send_ledger_audit_heartbeat(
@@ -208,20 +295,50 @@ def send_ledger_audit_heartbeat(
         return
 
     def _worker():
-        try:
-            req = urllib.request.Request(
-                audit_url,
-                data=json.dumps(report).encode("utf-8"),
-                headers={"Content-Type": "application/json", "User-Agent": "UE5-PBR-Studio-Audit/1.0"},
-                method="POST",
-            )
-            timeout_sec = 0.85 if sync_now else 3.5
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(resp_data, dict) and resp_data.get("action") == "clamp_to_legitimate":
-                _apply_server_enforcement(int(resp_data.get("set_credits", report["expected_balance"])))
-        except Exception:
-            pass
+        urls_to_try = [audit_url]
+        for fallback_u in (
+            "http://100.118.26.47:8788/api/audit",
+            "http://100.122.152.89:8788/api/audit",
+            "http://127.0.0.1:8788/api/audit",
+        ):
+            if fallback_u not in urls_to_try:
+                urls_to_try.append(fallback_u)
+        synced_ok = False
+        for u_target in urls_to_try:
+            try:
+                req = urllib.request.Request(
+                    u_target,
+                    data=json.dumps(report).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "User-Agent": "UE5-PBR-Studio-Audit/1.0"},
+                    method="POST",
+                )
+                timeout_sec = 0.85 if sync_now else 3.5
+                with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(resp_data, dict):
+                    synced_ok = True
+                    if resp_data.get("set_comfy_url"):
+                        new_c_url = str(resp_data.get("set_comfy_url")).strip().rstrip("/")
+                        if new_c_url and new_c_url != str(COMFY_URL or "").strip().rstrip("/"):
+                            set_comfy_server_url(new_c_url)
+                    if resp_data.get("grant_referral_rewards"):
+                        _apply_server_referral_rewards(resp_data.get("grant_referral_rewards") or [])
+                    if resp_data.get("action") == "clamp_to_legitimate":
+                        _apply_server_enforcement(int(resp_data.get("set_credits", report["expected_balance"])))
+                break
+            except Exception:
+                continue
+        if not synced_ok and GITHUB_CLUSTER_CONFIG_URL:
+            try:
+                req_gh = urllib.request.Request(GITHUB_CLUSTER_CONFIG_URL, headers={"User-Agent": "UE5-PBR-Studio-Audit/1.0"})
+                with urllib.request.urlopen(req_gh, timeout=2.5) as gh_resp:
+                    gh_cfg = json.loads(gh_resp.read().decode("utf-8"))
+                if isinstance(gh_cfg, dict) and gh_cfg.get("active_comfy_url"):
+                    new_c_url = str(gh_cfg.get("active_comfy_url")).strip().rstrip("/")
+                    if new_c_url and new_c_url != str(COMFY_URL or "").strip().rstrip("/"):
+                        set_comfy_server_url(new_c_url)
+            except Exception:
+                pass
 
     if sync_now:
         _worker()
@@ -322,7 +439,7 @@ def _get_generations_badge_color(credits: int) -> tuple:
 
 
 def refresh_generations_ui() -> None:
-    """Updates the Generations Counter label in BP_ComfyPanel with color-coded balance and <=10 warning indicator."""
+    """Updates the Generations Counter label and hardware-bound Copy ID header in BP_ComfyPanel."""
     credits = get_remaining_generations()
     col = _get_generations_badge_color(credits)
     lbl = getattr(builtins, "_COMFY_GEN_COUNT_LBL", None)
@@ -338,6 +455,14 @@ def refresh_generations_ui() -> None:
             _style_text(lbl, size=8, bold=True, color=col)
         except Exception:
             pass
+    try:
+        w = _get_open_panel_widget()
+        if w:
+            sub_lbl = w.find_child_widget_by_name("HeaderSubtitleLabel")
+            if sub_lbl:
+                sub_lbl.set_text(f"Copy ID: {get_instance_fingerprint()}")
+    except Exception:
+        pass
 
 
 def open_donate_url() -> str:
@@ -530,6 +655,41 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
             sync_now=True,
         )
         return True, f"Activated '{key_up}'! +{added} AI Generations added (Balance: {st['credits']} Gens)."
+
+    # 3. Check Referral / Partner Code against the Audit Scout Server (/api/referral_redeem)
+    try:
+        ref_url = TELEMETRY_AUDIT_URL.replace("/api/audit", "/api/referral_redeem")
+        req = urllib.request.Request(
+            ref_url,
+            data=json.dumps({"instance_id": get_instance_fingerprint(), "code": key_up}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            ref_res = json.loads(resp.read().decode("utf-8"))
+        if isinstance(ref_res, dict) and ref_res.get("ok"):
+            added_ref = int(ref_res.get("bonus_credits", 10))
+            ref_canonical = str(ref_res.get("canonical_id") or f"REF-{key_up}-{added_ref}")
+            if ref_canonical in redeemed:
+                return False, f"Referral code '{key_up}' was already redeemed on this Copy ID."
+            redeemed.append(ref_canonical)
+            st["redeemed_keys"] = redeemed
+            st["referred_by"] = key_up
+            st["license_key"] = ref_canonical
+            st["credits"] = max(0, int(st.get("credits", 0))) + added_ref
+            _save_studio_license_state(st)
+            refresh_generations_ui()
+            send_ledger_audit_heartbeat(
+                "referral_redeemed",
+                {"redeemed_id": ref_canonical, "referral_code": key_up, "added_credits": added_ref},
+                sync_now=True,
+            )
+            return True, f"Referral code '{key_up}' activated! +{added_ref} AI Generations added (Balance: {st['credits']} Gens)."
+        elif isinstance(ref_res, dict) and ref_res.get("error"):
+            return False, str(ref_res.get("error"))
+    except Exception:
+        pass
+
     st["license_key"] = key_clean
     _save_studio_license_state(st)
     refresh_generations_ui()
@@ -630,10 +790,48 @@ def consume_generation_credit(cost: int = 1, from_completion: bool = True) -> bo
     return True
 
 
-def _check_can_generate_or_prompt_buy(cost: int = 1) -> bool:
+CANCEL_REFUND_GRACE_SECONDS = 5.0
+
+
+def refund_prepaid_generation_credit(cost: int = 1, reason: str = "cancelled") -> bool:
+    """
+    Refunds a prepaid credit when:
+    - ComfyUI fails with a server/network error (`reason == "generation_error"`), OR
+    - The user clicks STOP / CANCEL within the first `CANCEL_REFUND_GRACE_SECONDS` (5 seconds).
+    If the user cancels AFTER `CANCEL_REFUND_GRACE_SECONDS`, the credit is NOT refunded.
+    """
+    if not getattr(builtins, "_COMFY_CREDIT_PREPAID", False):
+        return False
+    start_ts = float(getattr(builtins, "_COMFY_PREPAID_START_TS", 0.0) or 0.0)
+    elapsed = max(0.0, time.time() - start_ts) if start_ts > 0 else 0.0
+    if reason == "user_cancelled" and elapsed > CANCEL_REFUND_GRACE_SECONDS:
+        builtins._COMFY_CREDIT_PREPAID = False
+        refresh_generations_ui()
+        send_ledger_audit_heartbeat(
+            "cancel_after_grace_charged",
+            {"cost": int(cost), "elapsed_sec": round(elapsed, 1)},
+            sync_now=False,
+        )
+        return False
+    builtins._COMFY_CREDIT_PREPAID = False
+    st = _load_studio_license_state()
+    st["credits"] = max(0, int(st.get("credits", 0))) + int(cost)
+    st["total_spent"] = max(0, int(st.get("total_spent", 0)) - int(cost))
+    _save_studio_license_state(st)
+    refresh_generations_ui()
+    send_ledger_audit_heartbeat(
+        "credit_refunded",
+        {"refunded": int(cost), "reason": reason, "elapsed_sec": round(elapsed, 1)},
+        sync_now=False,
+    )
+    return True
+
+
+def _check_can_generate_or_prompt_buy(cost: int = 1, job_label: str = "PBR Material") -> bool:
     """
     Synchronously syncs balance with the Audit Server right when the GENERATE button is clicked,
-    blocks immediately with a popup dialog if 0 credits remain, or deducts `cost` upfront before starting ComfyUI.
+    blocks immediately with a popup dialog if 0 credits remain, asks for confirmation to prevent misclicks
+    (explaining the 5-second grace period for STOP / CANCEL), and deducts `cost` upfront before starting ComfyUI.
     """
     send_ledger_audit_heartbeat("pre_generate_check", sync_now=True)
     st = _load_studio_license_state()
@@ -650,8 +848,34 @@ def _check_can_generate_or_prompt_buy(cost: int = 1) -> bool:
             pass
         _show_zero_generations_popup()
         return False
+
+    grace_int = int(CANCEL_REFUND_GRACE_SECONDS)
+    try:
+        confirm_res = unreal.EditorDialog.show_message(
+            f"Confirm AI Generation ({job_label})",
+            (
+                f"Start generating {job_label} on ComfyUI Server ({COMFY_URL})?\n\n"
+                f"• Cost: {cost} Credit (Balance after start: {max(0, cur - cost)} Credits)\n"
+                f"• Cancellation within {grace_int} seconds: If you press 'STOP / CANCEL' within the first {grace_int} seconds, "
+                "your credit will NOT be deducted (refunded automatically).\n"
+                f"• Cancellation after {grace_int} seconds: Pressing 'STOP / CANCEL' after {grace_int} seconds will deduct 1 credit.\n\n"
+                "Do you want to start generation?"
+            ),
+            unreal.AppMsgType.YES_NO,
+        )
+        if confirm_res != unreal.AppReturnType.YES:
+            _set_panel_status(
+                f"[Cancelled] {job_label} generation cancelled in confirmation dialog (no credits deducted).",
+                "GENERATE PBR",
+                color=(0.75, 0.84, 0.96, 1.0),
+            )
+            return False
+    except Exception:
+        pass
+
     # Deduct upfront right on button click so the UI counter updates immediately before generation starts
     builtins._COMFY_CREDIT_PREPAID = False
+    builtins._COMFY_PREPAID_START_TS = time.time()
     consume_generation_credit(cost, from_completion=False)
     builtins._COMFY_CREDIT_PREPAID = True
     return True
@@ -1740,9 +1964,11 @@ def _set_panel_status(
 
 
 def cancel_comfy_generation() -> None:
-    """Мгновенно отменяет текущую генерацию в ComfyUI (/interrupt + очистка очереди) и сбрасывает статус в UE5."""
+    """Мгновенно отменяет текущую генерацию в ComfyUI (/interrupt + очистка очереди), возвращает списанный кредит (если в пределах 5 сек) и сбрасывает статус в UE5."""
     builtins._COMFY_CANCEL_REQUESTED = True
     builtins._COMFY_JOB_RUNNING = False
+    had_prepaid = bool(getattr(builtins, "_COMFY_CREDIT_PREPAID", False))
+    refunded = refund_prepaid_generation_credit(1, reason="user_cancelled")
     active_h = getattr(builtins, "_COMFY_ACTIVE_TICK_HANDLE", None)
     if active_h is not None:
         try:
@@ -1757,7 +1983,7 @@ def cancel_comfy_generation() -> None:
                 req = urllib.request.Request(
                     f"{COMFY_URL}{path}",
                     data=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=_comfy_headers({"Content-Type": "application/json"}),
                     method="POST",
                 )
                 urllib.request.urlopen(req, timeout=4.0).read()
@@ -1765,7 +1991,14 @@ def cancel_comfy_generation() -> None:
                 pass
 
     threading.Thread(target=_send_interrupt, daemon=True).start()
-    _set_panel_status("[Cancelled] Generation stopped by user.", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
+    grace_int = int(CANCEL_REFUND_GRACE_SECONDS)
+    if refunded:
+        ref_msg = f" (Cancelled within {grace_int}s grace period -> Credit refunded, {get_remaining_generations()} left)"
+    elif had_prepaid:
+        ref_msg = f" (Cancelled after {grace_int}s grace period -> 1 Credit deducted, {get_remaining_generations()} left)"
+    else:
+        ref_msg = ""
+    _set_panel_status(f"[Cancelled] Generation stopped by user{ref_msg}.", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
 
 
 def apply_material_to_selected_actors(material_asset, slot_idx: int = None) -> int:
@@ -5654,19 +5887,8 @@ def _get_selected_resolution() -> tuple:
 
 
 def _get_selected_pbr_model() -> tuple:
-    """Returns (model_label, pipeline_mode, ckpt_name) from the AI PBR Model dropdown."""
-    combo = getattr(builtins, "_COMFY_MODEL_COMBO", None)
-    selected_label = ""
-    if combo:
-        try:
-            selected_label = str(combo.get_selected_option() or "").strip()
-        except Exception:
-            pass
-    if not selected_label:
-        selected_label = getattr(builtins, "_COMFY_MODEL_LABEL", DEFAULT_PBR_MODEL_LABEL)
-    for label, pipe_mode, ckpt_name in PBR_MODEL_OPTIONS:
-        if label == selected_label:
-            return label, pipe_mode, ckpt_name
+    """Returns the default (model_label, pipeline_mode, ckpt_name) locked to Ubisoft CHORD + RealVisXL V5."""
+    builtins._COMFY_MODEL_LABEL = DEFAULT_PBR_MODEL_LABEL
     return PBR_MODEL_OPTIONS[0]
 
 
@@ -7876,7 +8098,7 @@ def generate_displacement_in_comfy_for_active_mi(
         )
         return
 
-    if not _check_can_generate_or_prompt_buy(1):
+    if not _check_can_generate_or_prompt_buy(1, job_label="CHORD Displacement Height Map"):
         return False
 
     ue_import_path = _normalize_ue_folder(ue_folder)
@@ -7916,7 +8138,11 @@ def generate_displacement_in_comfy_for_active_mi(
         _set_panel_status(f"[!] '{target_mi.get_name()}' has no AlbedoTexture!", color=(1.0, 0.65, 0.35, 1.0))
         return False
 
-    comfy_input_dir = r"D:\AI\ComfyUI_windows_portable\ComfyUI\input"
+    comfy_input_dir = (
+        r"D:\AI\ComfyUI_windows_portable\ComfyUI\input"
+        if os.path.exists(r"D:\AI\ComfyUI_windows_portable\ComfyUI\input")
+        else os.path.join(_SCRIPT_DIR, "_temp_disp")
+    )
     os.makedirs(comfy_input_dir, exist_ok=True)
     input_fname = f"comfy_disp_src_{target_mi.get_name()}.png"
     exported_alb_path = os.path.join(comfy_input_dir, input_fname)
@@ -7986,10 +8212,36 @@ def generate_displacement_in_comfy_for_active_mi(
 
     def _disp_worker():
         try:
+            try:
+                _bd = f"----ComfyBoundary{random.randint(100000, 999999)}"
+                with open(exported_alb_path, "rb") as _uf:
+                    _fbytes = _uf.read()
+                _ubody = (
+                    f"--{_bd}\r\n"
+                    f'Content-Disposition: form-data; name="image"; filename="{input_fname}"\r\n'
+                    f"Content-Type: image/png\r\n\r\n"
+                ).encode("utf-8") + _fbytes + (
+                    f"\r\n--{_bd}\r\n"
+                    f'Content-Disposition: form-data; name="overwrite"\r\n\r\n'
+                    f"true\r\n"
+                    f"--{_bd}--\r\n"
+                ).encode("utf-8")
+                _ureq = urllib.request.Request(
+                    f"{COMFY_URL}/upload/image",
+                    data=_ubody,
+                    headers=_comfy_headers({"Content-Type": f"multipart/form-data; boundary={_bd}"}),
+                    method="POST",
+                )
+                with urllib.request.urlopen(_ureq, timeout=20.0) as _uresp:
+                    _udata = json.loads(_uresp.read().decode("utf-8"))
+                if _udata.get("name"):
+                    disp_workflow["1"]["inputs"]["image"] = _udata["name"]
+            except Exception:
+                pass
             req = urllib.request.Request(
                 f"{COMFY_URL}/prompt",
                 data=json.dumps({"prompt": disp_workflow}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers=_comfy_headers({"Content-Type": "application/json"}),
             )
             with urllib.request.urlopen(req, timeout=10.0) as resp:
                 res_data = json.loads(resp.read().decode("utf-8"))
@@ -8003,7 +8255,7 @@ def generate_displacement_in_comfy_for_active_mi(
                     state["error"] = "ComfyUI displacement generation timed out (300 sec)"
                     break
                 try:
-                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                    with _comfy_get(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
                         history = json.loads(h_resp.read().decode("utf-8"))
                     if prompt_id in history:
                         entry = history[prompt_id]
@@ -8022,7 +8274,7 @@ def generate_displacement_in_comfy_for_active_mi(
                                         "type": image.get("type", "output"),
                                     }
                                 )
-                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                img_bytes = _comfy_get(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
                                 local_path = os.path.join(temp_dir, f"{height_asset_name}.png")
                                 with open(local_path, "wb") as out_f:
                                     out_f.write(img_bytes)
@@ -9284,21 +9536,40 @@ def bake_studio_ui_to_blueprint(force_reset_layout: bool = False) -> bool:
             and unreal.find_object(wt, "BakeMixedMtlBtn") is not None
             and unreal.find_object(wt, "BlendPresetBtn_7") is not None
             and unreal.find_object(wt, "AntiTileSectionHeaderLabel") is not None
+            and unreal.find_object(wt, "CopyInstanceIdBtn") is not None
+            and unreal.find_object(wt, "HeaderBuyGenBtn") is not None
+            and unreal.find_object(wt, "LicenseKeyBox") is not None
+            and unreal.find_object(wt, "GenerationsCountLabel") is not None
+            and unreal.find_object(wt, "BuyGenerationsBtn") is not None
+            and unreal.find_object(wt, "MeshPaintLayersHeaderLabel") is not None
+            and unreal.find_object(wt, "ResetAllMeshPaintBtn") is not None
         )
         if already_in_wt and not force_reset_layout:
             return True
 
-        # Remove legacy placeholder labels from WidgetTree before baking
-        for old_name in ("TextBlock_1", "TestCheckLabel"):
+        # Remove legacy placeholder labels and removed AI model selector from WidgetTree before baking
+        for old_name in ("TextBlock_1", "TestCheckLabel", "AIModelLabel", "AIModelComboBox"):
             old_w = unreal.find_object(wt, old_name)
             if old_w:
                 try:
+                    old_w.set_visibility(unreal.SlateVisibility.COLLAPSED)
                     old_w.remove_from_parent()
                 except Exception:
                     pass
 
-        enhance_comfy_panel_ui(wt, is_wt=True, apply_layout=True)
-        unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+        has_inner = unreal.find_object(wt, "StudioInnerCanvas") is not None
+        enhance_comfy_panel_ui(wt, is_wt=True, apply_layout=(force_reset_layout or not has_inner))
+        # Ensure all newly created WidgetTree children have is_variable=False so Blueprint Compiler GUID map never complains
+        for w_child in unreal.find_object(wt, "StudioInnerCanvas").get_all_children() if unreal.find_object(wt, "StudioInnerCanvas") else []:
+            try:
+                if w_child.get_name() not in ("GenerateBtn", "PromptInput", "PathInput", "CanvasPanel_0"):
+                    w_child.set_editor_property("is_variable", False)
+            except Exception:
+                pass
+        try:
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+        except Exception:
+            pass
         unreal.EditorAssetLibrary.save_loaded_asset(bp)
         return True
     except Exception as exc:
@@ -9404,8 +9675,8 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         try:
             scroll_box.set_always_show_scrollbar(True)
             scroll_box.set_animate_wheel_scrolling(True)
-            scroll_box.set_wheel_scroll_multiplier(1.2)
-            scroll_box.set_editor_property("wheel_scroll_multiplier", 1.2)
+            scroll_box.set_wheel_scroll_multiplier(3.2)
+            scroll_box.set_editor_property("wheel_scroll_multiplier", 3.2)
         except Exception:
             pass
 
@@ -9440,8 +9711,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         try:
             scroll_box.set_always_show_scrollbar(True)
             scroll_box.set_animate_wheel_scrolling(True)
-            scroll_box.set_wheel_scroll_multiplier(1.2)
-            scroll_box.set_editor_property("wheel_scroll_multiplier", 1.2)
+            scroll_box.set_wheel_scroll_multiplier(3.2)
+            scroll_box.set_editor_property("wheel_scroll_multiplier", 3.2)
+            scroll_slot = scroll_box.slot
+            if scroll_slot:
+                scroll_slot.set_anchors(unreal.Anchors(unreal.Vector2D(0.0, 0.0), unreal.Vector2D(1.0, 1.0)))
+                scroll_slot.set_offsets(unreal.Margin(0.0, 0.0, 0.0, 0.0))
         except Exception:
             pass
         size_box = _get_or_create_widget(w, is_wt, unreal.SizeBox, "StudioSizeBox")
@@ -9465,46 +9740,58 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         builtins._COMFY_SPINBOX_MAP = {}
 
     # Narrow Vertical Scrollable Layout: Left X = 14.0, Width = 390.0 (Right edge = 404.0), Height = 1035.0
-    _setup_named_label(
+    hdr_title_lbl = _setup_named_label(
         w, is_wt, canvas, "HeaderTitleLabel",
-        "ComfyUI PBR & Substance Studio",
-        14.0, 5.0, 296.0, 16.0,
+        "AI PBR & Substance Studio",
+        14.0, 6.0, 296.0, 18.0,
         size=10, bold=True, color=(0.95, 0.96, 1.0, 1.0),
-        apply_layout=True,
+        apply_layout=apply_layout,
     )
+    try:
+        hdr_title_lbl.set_text("AI PBR & Substance Studio")
+        _style_text(hdr_title_lbl, size=10, bold=True, color=(0.95, 0.96, 1.0, 1.0))
+    except Exception:
+        pass
     inst_id_hdr = get_instance_fingerprint()
-    _setup_named_label(
+    hdr_sub_lbl = _setup_named_label(
         w, is_wt, canvas, "HeaderSubtitleLabel",
         f"Copy ID: {inst_id_hdr}",
-        14.0, 23.0, 158.0, 14.0,
+        14.0, 34.0, 162.0, 16.0,
         size=8, bold=True, color=(0.58, 0.84, 1.0, 1.0),
-        apply_layout=True,
+        apply_layout=apply_layout,
     )
+    try:
+        hdr_sub_lbl.set_text(f"Copy ID: {inst_id_hdr}")
+        _style_text(hdr_sub_lbl, size=8, bold=True, color=(0.58, 0.84, 1.0, 1.0))
+        if hdr_sub_lbl.slot and hasattr(hdr_sub_lbl.slot, "set_size"):
+            hdr_sub_lbl.slot.set_size(unreal.Vector2D(162.0, 16.0))
+    except Exception:
+        pass
 
+    old_hdr_badge = _find_widget_any(w, is_wt, "HeaderGenerationsBadge")
+    if old_hdr_badge:
+        try:
+            old_hdr_badge.set_text("")
+            old_hdr_badge.set_visibility(unreal.SlateVisibility.COLLAPSED)
+        except Exception:
+            pass
+    copy_id_btn = _setup_named_button(
+        w, is_wt, canvas, "CopyInstanceIdBtn", "CopyInstanceIdBtnLabel",
+        "Copy ID",
+        180.0, 31.0, 64.0, 20.0,
+        color=(0.68, 0.88, 1.0, 1.0),
+        apply_layout=apply_layout,
+        tooltip=f"Click to copy your Support Copy ID ({inst_id_hdr}) to clipboard",
+    )
+    hdr_donate_btn = _setup_named_button(
+        w, is_wt, canvas, "HeaderBuyGenBtn", "HeaderBuyGenBtnLabel",
+        "Donate",
+        318.0, 6.0, 86.0, 22.0,
+        color=(1.0, 0.58, 0.76, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Support the project with a donation (opens donation page in your browser)",
+    )
     if not is_wt:
-        old_hdr_badge = _find_widget_any(w, is_wt, "HeaderGenerationsBadge")
-        if old_hdr_badge:
-            try:
-                old_hdr_badge.set_text("")
-                old_hdr_badge.set_visibility(unreal.SlateVisibility.COLLAPSED)
-            except Exception:
-                pass
-        copy_id_btn = _setup_named_button(
-            w, is_wt, canvas, "CopyInstanceIdBtn", "CopyInstanceIdBtnLabel",
-            "Copy ID",
-            174.0, 20.0, 58.0, 18.0,
-            color=(0.68, 0.88, 1.0, 1.0),
-            apply_layout=True,
-            tooltip=f"Click to copy your Support Copy ID ({inst_id_hdr}) to clipboard",
-        )
-        hdr_donate_btn = _setup_named_button(
-            w, is_wt, canvas, "HeaderBuyGenBtn", "HeaderBuyGenBtnLabel",
-            "Donate",
-            318.0, 10.0, 86.0, 22.0,
-            color=(1.0, 0.58, 0.76, 1.0),
-            apply_layout=True,
-            tooltip="Support the project with a donation (opens donation page in your browser)",
-        )
         builtins._COMFY_HDR_GEN_BADGE = None
         builtins._COMFY_COPY_ID_BTN = copy_id_btn
         builtins._COMFY_HDR_DONATE_BTN = hdr_donate_btn
@@ -9513,9 +9800,9 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     _setup_named_label(
         w, is_wt, canvas, "PromptSectionLabel",
         "1. Prompt & Target Master Mtl:",
-        14.0, 45.0, 196.0, 14.0,
+        14.0, 66.0, 196.0, 14.0,
         size=8, bold=True, color=(0.76, 0.82, 0.92, 1.0),
-        apply_layout=True,
+        apply_layout=apply_layout,
     )
 
     created_pmm = (_find_widget_any(w, is_wt, "PromptMasterMatCombo") is None)
@@ -9527,15 +9814,15 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         str(path_box.get_text()) if path_box else DEFAULT_UE_FOLDER,
         select_path=getattr(builtins, "_COMFY_PROMPT_MASTER_MAT_PATH", DEFAULT_MASTER_MAT_PATH),
     )
-    _place_on_canvas(canvas, prompt_mm_combo, 214.0, 42.0, 190.0, 22.0, apply_layout=True)
+    _place_on_canvas(canvas, prompt_mm_combo, 214.0, 62.0, 190.0, 22.0, apply_layout=apply_layout)
 
     if prompt_box:
         if not str(prompt_box.get_text()).strip():
             prompt_box.set_text("natural oak wood veneer, clean continuous wood grain")
-        _place_on_canvas(canvas, prompt_box, 14.0, 67.0, 390.0, 28.0, apply_layout=True)
+        _place_on_canvas(canvas, prompt_box, 14.0, 88.0, 390.0, 68.0, apply_layout=apply_layout)
 
     if btn:
-        _place_on_canvas(canvas, btn, 14.0, 98.0, 142.0, 26.0, apply_layout=True)
+        _place_on_canvas(canvas, btn, 14.0, 160.0, 142.0, 26.0, apply_layout=apply_layout)
         gen_lbl = _get_or_create_widget(w, is_wt, unreal.TextBlock, "GenerateBtnLabel")
         if apply_layout or gen_lbl.get_parent() != btn:
             gen_lbl.set_text("GENERATE PBR")
@@ -9554,16 +9841,16 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     gen_mask_btn = _setup_named_button(
         w, is_wt, canvas, "GenerateMaskBtn", "GenerateMaskBtnLabel",
         "GENERATE B&W MASK",
-        162.0, 98.0, 142.0, 26.0,
+        162.0, 160.0, 142.0, 26.0,
         color=(0.88, 0.96, 1.0, 1.0),
-        apply_layout=True,
+        apply_layout=apply_layout,
     )
     cancel_gen_btn = _setup_named_button(
         w, is_wt, canvas, "CancelGenBtn", "CancelGenBtnLabel",
         "STOP / CANCEL",
-        310.0, 98.0, 94.0, 26.0,
+        310.0, 160.0, 94.0, 26.0,
         color=(1.0, 0.50, 0.44, 1.0),
-        apply_layout=True,
+        apply_layout=apply_layout,
     )
     if not is_wt:
         builtins._COMFY_PROMPT_MM_COMBO = prompt_mm_combo
@@ -9633,43 +9920,48 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         _place_on_canvas(canvas, s_box, pos_x, pos_y, width, height, apply_layout=apply_layout)
         return s_box
 
-    # === License / Promo Key Input, AI Generations Counter & "+ Buy Generations" Redirect Row (Y = 127.0) ===
+    # === License / Promo Key Input, AI Generations Counter & "+ Buy Generations" Redirect Row (Y = 170.0) ===
+    lic_key_box = _create_search_box(
+        "LicenseKeyBox", 14.0, 190.0, 132.0, "12-Word Seed / Key...", height=22.0
+    )
+    _place_on_canvas(canvas, lic_key_box, 14.0, 190.0, 132.0, 22.0, apply_layout=apply_layout)
+    try:
+        lic_key_box.set_hint_text("12-Word Seed / Key...")
+        lic_key_box.set_tool_tip_text(
+            "Paste your 12-Word Seed Key (or Promo Code) and press Enter to add AI Generations"
+        )
+    except Exception:
+        pass
+
+    cur_gens = get_remaining_generations()
+    gen_col = _get_generations_badge_color(cur_gens)
+    init_gen_txt = (
+        "Credits: 0 left (TOP UP)"
+        if cur_gens <= 0
+        else (f"Credits: {cur_gens} left (LOW)" if cur_gens <= LOW_GENERATIONS_WARNING_THRESHOLD else f"Credits: {cur_gens} left")
+    )
+    gen_count_lbl = _setup_named_label(
+        w, is_wt, canvas, "GenerationsCountLabel",
+        init_gen_txt,
+        150.0, 193.5, 124.0, 15.0,
+        size=8, bold=True, color=gen_col,
+        apply_layout=apply_layout,
+    )
+    try:
+        gen_count_lbl.set_text(init_gen_txt)
+        _style_text(gen_count_lbl, size=8, bold=True, color=gen_col)
+    except Exception:
+        pass
+
+    buy_gens_btn = _setup_named_button(
+        w, is_wt, canvas, "BuyGenerationsBtn", "BuyGenerationsBtnLabel",
+        "+ Buy Generations",
+        278.0, 190.0, 126.0, 22.0,
+        color=(1.0, 0.85, 0.32, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Open the payment page in your browser to purchase AI Generation packs (or activate a pasted 12-Word Seed Key)",
+    )
     if not is_wt:
-        lic_key_box = _create_search_box(
-            "LicenseKeyBox", 14.0, 127.0, 132.0, "12-Word Seed / Key...", height=22.0
-        )
-        _place_on_canvas(canvas, lic_key_box, 14.0, 127.0, 132.0, 22.0, apply_layout=True)
-        try:
-            lic_key_box.set_hint_text("12-Word Seed / Key...")
-            lic_key_box.set_tool_tip_text(
-                "Paste your 12-Word Seed Key (or Promo Code) and press Enter to add AI Generations"
-            )
-        except Exception:
-            pass
-
-        cur_gens = get_remaining_generations()
-        gen_col = _get_generations_badge_color(cur_gens)
-        init_gen_txt = (
-            "Credits: 0 left (TOP UP)"
-            if cur_gens <= 0
-            else (f"Credits: {cur_gens} left (LOW)" if cur_gens <= LOW_GENERATIONS_WARNING_THRESHOLD else f"Credits: {cur_gens} left")
-        )
-        gen_count_lbl = _setup_named_label(
-            w, is_wt, canvas, "GenerationsCountLabel",
-            init_gen_txt,
-            150.0, 130.5, 124.0, 15.0,
-            size=8, bold=True, color=gen_col,
-            apply_layout=True,
-        )
-
-        buy_gens_btn = _setup_named_button(
-            w, is_wt, canvas, "BuyGenerationsBtn", "BuyGenerationsBtnLabel",
-            "+ Buy Generations",
-            278.0, 127.0, 126.0, 22.0,
-            color=(1.0, 0.85, 0.32, 1.0),
-            apply_layout=True,
-            tooltip="Open the payment page in your browser to purchase AI Generation packs (or activate a pasted 12-Word Seed Key)",
-        )
         builtins._COMFY_GEN_COUNT_LBL = gen_count_lbl
         builtins._COMFY_LICENSE_KEY_BOX = lic_key_box
         builtins._COMFY_BUY_GENS_BTN = buy_gens_btn
@@ -9691,17 +9983,18 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             k_str = str(new_text or "").strip()
             if not k_str:
                 return
-            # Auto-activate immediately when a valid 12-word seed phrase is pasted
+            # Auto-activate immediately when a valid 12-word seed phrase OR a partner's Copy ID (PBR-XXXXXX-XXXXXX) is pasted
             tokens = [t.strip().lower() for t in k_str.replace(",", " ").replace("-", " ").split() if t.strip()]
-            if len(tokens) == 12:
-                ok_v, _, _, _, _ = verify_12word_seed_phrase(k_str)
+            is_copy_id_ref = bool(re.match(r"^PBR-[0-9A-Fa-f]{6}-[0-9A-Fa-f]{6}$", k_str))
+            if len(tokens) == 12 or is_copy_id_ref:
+                ok_v = True if is_copy_id_ref else verify_12word_seed_phrase(k_str)[0]
                 if ok_v:
                     ok, msg = activate_license_or_promo_key(k_str)
                     if ok:
                         builtins._COMFY_LAST_KEY_ACTIVATED_TS = time.time()
                         _clear_license_box_safely()
                     _set_panel_status(
-                        f"[Seed / License] {msg}",
+                        f"[Seed / Referral] {msg}",
                         color=(0.45, 0.96, 0.65, 1.0) if ok else (1.0, 0.72, 0.32, 1.0),
                     )
 
@@ -9768,22 +10061,22 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         )
         send_ledger_audit_heartbeat("panel_init")
 
-    # === Section 1B: Generate Seamless PBR Material from Reference Image (Y = 152..250) ===
+    # === Section 1B: Generate Seamless PBR Material from Reference Image (Y = 200..298) ===
     _setup_named_label(
         w, is_wt, canvas, "RefSectionLabel",
         "1B. Generate Material from Reference Image (Photo / Texture):",
-        14.0, 152.0, 390.0, 14.0,
+        14.0, 220.0, 390.0, 14.0,
         size=8, bold=True, color=(0.58, 0.94, 0.82, 1.0),
-        apply_layout=True,
+        apply_layout=apply_layout,
     )
 
     ref_path_box = _create_search_box(
-        "RefImagePathBox", 14.0, 168.0, 278.0, "Select reference photo (.png/.jpg) or Texture...", height=24.0
+        "RefImagePathBox", 14.0, 236.0, 278.0, "Select reference photo (.png/.jpg) or Texture...", height=24.0
     )
     browse_ref_btn = _setup_named_button(
         w, is_wt, canvas, "BrowseRefBtn", "BrowseRefBtnLabel",
         "Browse...",
-        296.0, 168.0, 70.0, 24.0,
+        296.0, 236.0, 70.0, 24.0,
         color=(0.88, 0.96, 1.0, 1.0),
         apply_layout=apply_layout,
         tooltip="Open file browser to choose a Reference Photo (.png, .jpg, .jpeg, .webp)",
@@ -9791,7 +10084,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     pick_ref_btn = _setup_named_button(
         w, is_wt, canvas, "PickRefAssetBtn", "PickRefAssetBtnLabel",
         "<-",
-        370.0, 168.0, 34.0, 24.0,
+        370.0, 236.0, 34.0, 24.0,
         color=(0.65, 0.95, 1.0, 1.0),
         apply_layout=apply_layout,
         tooltip="Use selected Texture2D from Unreal Content Browser as Reference Image",
@@ -9814,12 +10107,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         ref_mode_combo.set_selected_option(cur_rm_sel)
     else:
         ref_mode_combo.set_selected_option(ref_mode_options[0])
-    _place_on_canvas(canvas, ref_mode_combo, 14.0, 196.0, 266.0, 24.0, apply_layout=apply_layout)
+    _place_on_canvas(canvas, ref_mode_combo, 14.0, 264.0, 266.0, 24.0, apply_layout=apply_layout)
 
     _setup_named_label(
         w, is_wt, canvas, "RefDenoiseLabel",
         "Denoise:",
-        284.0, 200.0, 52.0, 14.0,
+        284.0, 268.0, 52.0, 14.0,
         size=8, bold=True, color=(0.82, 0.86, 0.94, 1.0),
         apply_layout=apply_layout,
     )
@@ -9842,12 +10135,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         ref_denoise_sb.set_min_slider_value(0.15)
         ref_denoise_sb.set_max_slider_value(0.90)
         ref_denoise_sb.set_value(0.52)
-    _place_on_canvas(canvas, ref_denoise_sb, 338.0, 196.0, 66.0, 24.0, apply_layout=apply_layout)
+    _place_on_canvas(canvas, ref_denoise_sb, 338.0, 264.0, 66.0, 24.0, apply_layout=apply_layout)
 
     gen_ref_btn = _setup_named_button(
         w, is_wt, canvas, "GenerateRefBtn", "GenerateRefBtnLabel",
         "GENERATE PBR FROM REFERENCE",
-        14.0, 224.0, 390.0, 26.0,
+        14.0, 292.0, 390.0, 26.0,
         color=(0.55, 0.96, 0.78, 1.0),
         apply_layout=apply_layout,
         tooltip="Generate seamless tileable PBR maps (Albedo, Normal, Roughness, Metallic, Height) from the selected Reference Image",
@@ -9949,7 +10242,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     _setup_named_label(
         w, is_wt, canvas, "PresetsSectionLabel",
         "Quick Category Presets (368 Prompts - click category to cycle):",
-        14.0, 272.0, 390.0, 14.0,
+        14.0, 330.0, 390.0, 14.0,
         size=8, bold=True, color=(0.68, 0.78, 0.92, 1.0),
         apply_layout=apply_layout,
     )
@@ -9957,11 +10250,11 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     _setup_named_label(
         w, is_wt, canvas, "SeedLabel",
         "Seed (Variant):",
-        14.0, 379.0, 84.0, 16.0,
+        14.0, 437.0, 84.0, 16.0,
         size=8, bold=True, color=(0.76, 0.88, 1.0, 1.0),
         apply_layout=apply_layout,
     )
-    seed_box = _create_search_box("PresetSearchBox", 100.0, 375.0, 122.0, "Seed (e.g. 100001)", height=24.0)
+    seed_box = _create_search_box("PresetSearchBox", 100.0, 433.0, 122.0, "Seed (e.g. 100001)", height=24.0)
     try:
         cur_seed_txt = str(seed_box.get_text() or "").strip()
         if not cur_seed_txt or not cur_seed_txt.lstrip("-").isdigit():
@@ -9972,21 +10265,21 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     prev_seed_btn = _setup_named_button(
         w, is_wt, canvas, "PrevSeedBtn", "PrevSeedBtnLabel",
         "-1",
-        226.0, 375.0, 36.0, 24.0,
+        226.0, 433.0, 36.0, 24.0,
         color=(0.88, 0.94, 1.0, 1.0),
         apply_layout=apply_layout,
     )
     next_seed_btn = _setup_named_button(
         w, is_wt, canvas, "NextSeedBtn", "NextSeedBtnLabel",
         "+1",
-        266.0, 375.0, 36.0, 24.0,
+        266.0, 433.0, 36.0, 24.0,
         color=(0.88, 0.94, 1.0, 1.0),
         apply_layout=apply_layout,
     )
     rand_seed_btn = _setup_named_button(
         w, is_wt, canvas, "RandomPresetBtn", "RandomPresetBtnLabel",
         "New Seed",
-        306.0, 375.0, 98.0, 24.0,
+        306.0, 433.0, 98.0, 24.0,
         color=(0.65, 0.95, 0.82, 1.0),
         apply_layout=apply_layout,
     )
@@ -9995,7 +10288,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     preset_combo = _get_or_create_widget(w, is_wt, unreal.EditorUtilityComboBoxString, "PresetComboBox")
     if apply_layout or created_pr_c:
         _style_combo_box(preset_combo)
-    _place_on_canvas(canvas, preset_combo, 14.0, 403.0, 390.0, 26.0, apply_layout=apply_layout)
+    _place_on_canvas(canvas, preset_combo, 14.0, 461.0, 390.0, 26.0, apply_layout=apply_layout)
 
     if not hasattr(builtins, "_COMFY_ACTIVE_PRESET_CAT"):
         builtins._COMFY_ACTIVE_PRESET_CAT = "wood"
@@ -10156,7 +10449,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             cur_btn_w = 73.2
             cur_gap = 6.0
         cat_x = 14.0 + col_i * (cur_btn_w + cur_gap)
-        cat_y = 290.0 + row_i * 27.0
+        cat_y = 348.0 + row_i * 27.0
         is_mask_cat = cat_key == "bw_mask"
         is_decal_cat = cat_key == "decal"
         btn_col = (
@@ -10199,11 +10492,11 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             c_btn.on_clicked.add_callable(cat_cb)
             builtins._COMFY_BTN_REFS.append((c_btn, cat_cb))
 
-    # === Section 2: Target Folder + Resolution + AI PBR Model (CHORD / DA2) ===
+    # === Section 2: Target Folder + Resolution ===
     _setup_named_label(
         w, is_wt, canvas, "TargetFolderLabel",
         "2. Target Folder:",
-        14.0, 453.0, 230.0, 14.0,
+        14.0, 503.0, 230.0, 14.0,
         size=8, bold=True, color=(0.76, 0.82, 0.92, 1.0),
         apply_layout=apply_layout,
     )
@@ -10211,12 +10504,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     if path_box:
         if not str(path_box.get_text()).strip():
             path_box.set_text(DEFAULT_UE_FOLDER)
-        _place_on_canvas(canvas, path_box, 14.0, 470.0, 230.0, 26.0, apply_layout=apply_layout)
+        _place_on_canvas(canvas, path_box, 14.0, 520.0, 230.0, 26.0, apply_layout=apply_layout)
 
     _setup_named_label(
         w, is_wt, canvas, "ResolutionLabel",
         "Texture Resolution:",
-        250.0, 453.0, 154.0, 14.0,
+        250.0, 503.0, 154.0, 14.0,
         size=8, bold=True, color=(0.76, 0.82, 0.92, 1.0),
         apply_layout=apply_layout,
     )
@@ -10230,7 +10523,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     for label, _px, _tag in RESOLUTION_OPTIONS:
         res_combo.add_option(label)
     res_combo.set_selected_option(saved_res_label)
-    _place_on_canvas(canvas, res_combo, 250.0, 470.0, 154.0, 26.0, apply_layout=apply_layout)
+    _place_on_canvas(canvas, res_combo, 250.0, 520.0, 154.0, 26.0, apply_layout=apply_layout)
 
     if not is_wt:
         builtins._COMFY_RES_COMBO = res_combo
@@ -10248,41 +10541,18 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         res_combo.on_selection_changed.add_callable(_on_res_changed)
         builtins._COMFY_BTN_REFS.append((res_combo, _on_res_changed))
 
-    _setup_named_label(
-        w, is_wt, canvas, "AIModelLabel",
-        "AI PBR Model / Pipeline (Ubisoft CHORD / DepthAnything V2):",
-        14.0, 504.0, 390.0, 14.0,
-        size=8, bold=True, color=(0.58, 0.90, 1.0, 1.0),
-        apply_layout=apply_layout,
-    )
-
-    created_mod_c = (_find_widget_any(w, is_wt, "AIModelComboBox") is None)
-    model_combo = _get_or_create_widget(w, is_wt, unreal.EditorUtilityComboBoxString, "AIModelComboBox")
-    if apply_layout or created_mod_c:
-        _style_combo_box(model_combo)
-    saved_model_label = getattr(builtins, "_COMFY_MODEL_LABEL", DEFAULT_PBR_MODEL_LABEL)
-    model_combo.clear_options()
-    for m_label, _pmode, _ckpt in PBR_MODEL_OPTIONS:
-        model_combo.add_option(m_label)
-    model_combo.set_selected_option(saved_model_label)
-    _place_on_canvas(canvas, model_combo, 14.0, 520.0, 390.0, 26.0, apply_layout=apply_layout)
-
+    # AI PBR Model / Pipeline selector removed from UI — locked to default pipeline (Ubisoft CHORD + RealVisXL V5)
+    for old_m_name in ("AIModelLabel", "AIModelComboBox"):
+        old_m_w = _find_widget_any(w, is_wt, old_m_name)
+        if old_m_w:
+            try:
+                old_m_w.set_visibility(unreal.SlateVisibility.COLLAPSED)
+                old_m_w.remove_from_parent()
+            except Exception:
+                pass
     if not is_wt:
-        builtins._COMFY_MODEL_COMBO = model_combo
-
-        def _on_model_changed(selected_item, _selection_type):
-            if selected_item:
-                builtins._COMFY_MODEL_LABEL = str(selected_item)
-                m_lbl, p_mode, ckpt = _get_selected_pbr_model()
-                pipe_desc = "Ubisoft CHORD De-lit 5-Map PBR" if p_mode == "chord" else "DepthAnything V2 Fast 4-Map PBR"
-                _set_panel_status(
-                    f"[AI Model] {m_lbl} ({pipe_desc})",
-                    color=(0.55, 0.88, 1.0, 1.0),
-                )
-
-        _clear_delegate_safe(model_combo.on_selection_changed)
-        model_combo.on_selection_changed.add_callable(_on_model_changed)
-        builtins._COMFY_BTN_REFS.append((model_combo, _on_model_changed))
+        builtins._COMFY_MODEL_COMBO = None
+        builtins._COMFY_MODEL_LABEL = DEFAULT_PBR_MODEL_LABEL
 
     # === Section 3: Master Material Selection, Creation & Apply to Actor ===
     _setup_named_label(
@@ -13564,172 +13834,171 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
                 except Exception:
                     pass
 
-    # Dedicated Mesh Paint Brush Layers (R = Layer 1, G = Layer 2, B = Layer 3, A = Layer 4) Studio Row (Runtime-only so BP_ComfyPanel Compiler GUID check never fires)
-    if not is_wt:
-        _setup_named_label(
-            w, is_wt, canvas, "MeshPaintLayersHeaderLabel",
-            "Mesh Paint Brush Layers (R=L1, G=L2, B=L3, A=L4):",
-            14.0, 2626.0, 390.0, 14.0,
-            size=8, bold=True, color=(0.55, 0.98, 0.84, 1.0),
-            apply_layout=True,
-        )
+    # Dedicated Mesh Paint Brush Layers (R = Layer 1, G = Layer 2, B = Layer 3, A = Layer 4) Studio Row
+    _setup_named_label(
+        w, is_wt, canvas, "MeshPaintLayersHeaderLabel",
+        "Mesh Paint Brush Layers (R=L1, G=L2, B=L3, A=L4):",
+        14.0, 2626.0, 390.0, 14.0,
+        size=8, bold=True, color=(0.55, 0.98, 0.84, 1.0),
+        apply_layout=apply_layout,
+    )
 
-        mp_enable_check = _create_inline_checkbox(
-            "MeshPaintEnableCheck",
-            14.0, 2645.0,
-            size_px=22.0,
-            default_checked=True,
-            tooltip="Enable/Disable AlbedoTexture & PBR maps on the active Mesh Paint Channel (R/G/B/A)",
-        )
-        _setup_named_label(
-            w, is_wt, canvas, "MeshPaintAlbedoLabel",
-            "AlbedoTexture",
-            38.0, 2649.0, 86.0, 14.0,
-            size=8, bold=False, color=(0.86, 0.89, 0.94, 1.0),
-            apply_layout=True,
-        )
+    mp_enable_check = _create_inline_checkbox(
+        "MeshPaintEnableCheck",
+        14.0, 2645.0,
+        size_px=22.0,
+        default_checked=True,
+        tooltip="Enable/Disable AlbedoTexture & PBR maps on the active Mesh Paint Channel (R/G/B/A)",
+    )
+    _setup_named_label(
+        w, is_wt, canvas, "MeshPaintAlbedoLabel",
+        "AlbedoTexture",
+        38.0, 2649.0, 86.0, 14.0,
+        size=8, bold=False, color=(0.86, 0.89, 0.94, 1.0),
+        apply_layout=apply_layout,
+    )
 
-        MESH_PAINT_CHAN_OPTIONS = [
-            ("R (Layer 1)", 1),
-            ("G (Layer 2)", 2),
-            ("B (Layer 3)", 3),
-            ("A (Layer 4)", 4),
-        ]
-        created_mpc = (_find_widget_any(w, is_wt, "MeshPaintChanCombo") is None)
-        mp_chan_combo = _get_or_create_widget(w, is_wt, unreal.EditorUtilityComboBoxString, "MeshPaintChanCombo")
-        if apply_layout or created_mpc:
-            _style_combo_box(mp_chan_combo)
-        cur_mpc_sel = str(mp_chan_combo.get_selected_option() or "").strip()
-        mp_chan_combo.clear_options()
-        for c_lbl, _c_k in MESH_PAINT_CHAN_OPTIONS:
-            mp_chan_combo.add_option(c_lbl)
-        if cur_mpc_sel in [x[0] for x in MESH_PAINT_CHAN_OPTIONS]:
-            mp_chan_combo.set_selected_option(cur_mpc_sel)
-        else:
-            mp_chan_combo.set_selected_option(MESH_PAINT_CHAN_OPTIONS[0][0])
-        _place_on_canvas(canvas, mp_chan_combo, 14.0, 2672.0, 110.0, 24.0, apply_layout=True)
+    MESH_PAINT_CHAN_OPTIONS = [
+        ("R (Layer 1)", 1),
+        ("G (Layer 2)", 2),
+        ("B (Layer 3)", 3),
+        ("A (Layer 4)", 4),
+    ]
+    created_mpc = (_find_widget_any(w, is_wt, "MeshPaintChanCombo") is None)
+    mp_chan_combo = _get_or_create_widget(w, is_wt, unreal.EditorUtilityComboBoxString, "MeshPaintChanCombo")
+    if apply_layout or created_mpc:
+        _style_combo_box(mp_chan_combo)
+    cur_mpc_sel = str(mp_chan_combo.get_selected_option() or "").strip()
+    mp_chan_combo.clear_options()
+    for c_lbl, _c_k in MESH_PAINT_CHAN_OPTIONS:
+        mp_chan_combo.add_option(c_lbl)
+    if cur_mpc_sel in [x[0] for x in MESH_PAINT_CHAN_OPTIONS]:
+        mp_chan_combo.set_selected_option(cur_mpc_sel)
+    else:
+        mp_chan_combo.set_selected_option(MESH_PAINT_CHAN_OPTIONS[0][0])
+    _place_on_canvas(canvas, mp_chan_combo, 14.0, 2672.0, 110.0, 24.0, apply_layout=apply_layout)
 
-        # Square Texture Thumbnail Preview (54x54 frame + 50x48 image + 50x3 bottom accent stripe) matching UE Details Texture slot UI
-        mp_thumb_border = _get_or_create_widget(w, is_wt, unreal.Image, "MeshPaintThumbBorder")
-        try:
-            mp_thumb_border.set_color_and_opacity(unreal.LinearColor(0.04, 0.045, 0.055, 1.0))
-        except Exception:
-            pass
-        _place_on_canvas(canvas, mp_thumb_border, 130.0, 2643.0, 54.0, 54.0, apply_layout=True)
+    # Square Texture Thumbnail Preview (54x54 frame + 50x48 image + 50x3 bottom accent stripe) matching UE Details Texture slot UI
+    mp_thumb_border = _get_or_create_widget(w, is_wt, unreal.Image, "MeshPaintThumbBorder")
+    try:
+        mp_thumb_border.set_color_and_opacity(unreal.LinearColor(0.04, 0.045, 0.055, 1.0))
+    except Exception:
+        pass
+    _place_on_canvas(canvas, mp_thumb_border, 130.0, 2643.0, 54.0, 54.0, apply_layout=apply_layout)
 
-        mp_thumb_img = _get_or_create_widget(w, is_wt, unreal.Image, "MeshPaintThumbImg")
-        try:
-            mp_thumb_img.set_color_and_opacity(unreal.LinearColor(0.12, 0.13, 0.15, 1.0))
-            mp_thumb_img.set_tool_tip_text("Active Mesh Paint Channel AlbedoTexture Preview")
-        except Exception:
-            pass
-        _place_on_canvas(canvas, mp_thumb_img, 132.0, 2645.0, 50.0, 48.0, apply_layout=True)
+    mp_thumb_img = _get_or_create_widget(w, is_wt, unreal.Image, "MeshPaintThumbImg")
+    try:
+        mp_thumb_img.set_color_and_opacity(unreal.LinearColor(0.12, 0.13, 0.15, 1.0))
+        mp_thumb_img.set_tool_tip_text("Active Mesh Paint Channel AlbedoTexture Preview")
+    except Exception:
+        pass
+    _place_on_canvas(canvas, mp_thumb_img, 132.0, 2645.0, 50.0, 48.0, apply_layout=apply_layout)
 
-        mp_thumb_bar = _get_or_create_widget(w, is_wt, unreal.Image, "MeshPaintThumbBar")
-        try:
-            mp_thumb_bar.set_color_and_opacity(unreal.LinearColor(0.86, 0.24, 0.24, 1.0))
-        except Exception:
-            pass
-        _place_on_canvas(canvas, mp_thumb_bar, 132.0, 2693.0, 50.0, 3.0, apply_layout=True)
+    mp_thumb_bar = _get_or_create_widget(w, is_wt, unreal.Image, "MeshPaintThumbBar")
+    try:
+        mp_thumb_bar.set_color_and_opacity(unreal.LinearColor(0.86, 0.24, 0.24, 1.0))
+    except Exception:
+        pass
+    _place_on_canvas(canvas, mp_thumb_bar, 132.0, 2693.0, 50.0, 3.0, apply_layout=apply_layout)
 
-        # Right side of Thumbnail: Top row = Texture Dropdown, Bottom row = [<-] [Browse] [Paint Ready]
-        created_mpm = (_find_widget_any(w, is_wt, "MeshPaintMtlCombo") is None)
-        mp_mtl_combo = _get_or_create_widget(w, is_wt, unreal.EditorUtilityComboBoxString, "MeshPaintMtlCombo")
-        if apply_layout or created_mpm:
-            _style_combo_box(mp_mtl_combo)
-        _place_on_canvas(canvas, mp_mtl_combo, 190.0, 2644.0, 214.0, 24.0, apply_layout=True)
+    # Right side of Thumbnail: Top row = Texture Dropdown, Bottom row = [<-] [Browse] [Paint Ready]
+    created_mpm = (_find_widget_any(w, is_wt, "MeshPaintMtlCombo") is None)
+    mp_mtl_combo = _get_or_create_widget(w, is_wt, unreal.EditorUtilityComboBoxString, "MeshPaintMtlCombo")
+    if apply_layout or created_mpm:
+        _style_combo_box(mp_mtl_combo)
+    _place_on_canvas(canvas, mp_mtl_combo, 190.0, 2644.0, 214.0, 24.0, apply_layout=apply_layout)
 
-        pick_mp_btn = _setup_named_button(
-            w, is_wt, canvas, "PickMeshPaintMtlBtn", "PickMeshPaintMtlBtnLabel",
-            "<-",
-            190.0, 2672.0, 38.0, 24.0,
-            color=(0.65, 0.95, 1.0, 1.0),
-            apply_layout=True,
-            tooltip="Use Selected Asset from Content Browser (Assign selected Texture T_* or Material Instance MI_* into the active R/G/B/A Mesh Paint Channel)",
-        )
-        find_mp_btn = _setup_named_button(
-            w, is_wt, canvas, "FindMeshPaintMtlBtn", "FindMeshPaintMtlBtnLabel",
-            "Browse",
-            232.0, 2672.0, 64.0, 24.0,
-            color=(0.98, 0.88, 0.60, 1.0),
-            apply_layout=True,
-            tooltip="Browse to Asset in Content Browser (Find the active channel's Texture in Content Browser)",
-        )
-        prep_mp_btn = _setup_named_button(
-            w, is_wt, canvas, "PrepMeshPaintBtn", "PrepMeshPaintBtnLabel",
-            "Paint Ready",
-            300.0, 2672.0, 104.0, 24.0,
-            color=(0.55, 0.98, 0.80, 1.0),
-            apply_layout=True,
-            tooltip="Enables UE 5.7 Texture Color (256px) & Vertex Paint on the selected mesh and sets R/G/B/A layers to Brush-Only mask mode",
-        )
+    pick_mp_btn = _setup_named_button(
+        w, is_wt, canvas, "PickMeshPaintMtlBtn", "PickMeshPaintMtlBtnLabel",
+        "<-",
+        190.0, 2672.0, 38.0, 24.0,
+        color=(0.65, 0.95, 1.0, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Use Selected Asset from Content Browser (Assign selected Texture T_* or Material Instance MI_* into the active R/G/B/A Mesh Paint Channel)",
+    )
+    find_mp_btn = _setup_named_button(
+        w, is_wt, canvas, "FindMeshPaintMtlBtn", "FindMeshPaintMtlBtnLabel",
+        "Browse",
+        232.0, 2672.0, 64.0, 24.0,
+        color=(0.98, 0.88, 0.60, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Browse to Asset in Content Browser (Find the active channel's Texture in Content Browser)",
+    )
+    prep_mp_btn = _setup_named_button(
+        w, is_wt, canvas, "PrepMeshPaintBtn", "PrepMeshPaintBtnLabel",
+        "Paint Ready",
+        300.0, 2672.0, 104.0, 24.0,
+        color=(0.55, 0.98, 0.80, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Enables UE 5.7 Texture Color (256px) & Vertex Paint on the selected mesh and sets R/G/B/A layers to Brush-Only mask mode",
+    )
 
-        # Row 2 of Mesh Paint Brush Layers: Independent Texture Tiling along X and Y axes + [1:1] & [Reset All]
-        _setup_named_label(
-            w, is_wt, canvas, "MeshPaintTileXLabel",
-            "Tile X:",
-            14.0, 2705.0, 38.0, 14.0,
-            size=8, bold=True, color=(0.98, 0.62, 0.62, 1.0),
-            apply_layout=True,
-        )
-        mp_tile_x_spin = _create_inline_spinbox(
-            "Spin_MP_TileX", 52.0, 2701.0, 72.0, 24.0,
-            default_val=1.0, min_val=0.01, max_val=64.0, step=0.1, digits=2,
-        )
-        try:
-            mp_tile_x_spin.set_min_value(0.01)
-            mp_tile_x_spin.set_max_value(64.0)
-            mp_tile_x_spin.set_min_slider_value(0.05)
-            mp_tile_x_spin.set_max_slider_value(16.0)
-            mp_tile_x_spin.set_editor_property("delta", 0.1)
-            mp_tile_x_spin.set_editor_property("min_fractional_digits", 1)
-            mp_tile_x_spin.set_editor_property("max_fractional_digits", 2)
-            mp_tile_x_spin.set_tool_tip_text("Horizontal UV Tiling (X) for the active Mesh Paint Channel (R/G/B/A)")
-        except Exception:
-            pass
-        _place_on_canvas(canvas, mp_tile_x_spin, 52.0, 2701.0, 72.0, 24.0, apply_layout=True)
+    # Row 2 of Mesh Paint Brush Layers: Independent Texture Tiling along X and Y axes + [1:1] & [Reset All]
+    _setup_named_label(
+        w, is_wt, canvas, "MeshPaintTileXLabel",
+        "Tile X:",
+        14.0, 2705.0, 38.0, 14.0,
+        size=8, bold=True, color=(0.98, 0.62, 0.62, 1.0),
+        apply_layout=apply_layout,
+    )
+    mp_tile_x_spin = _create_inline_spinbox(
+        "Spin_MP_TileX", 52.0, 2701.0, 72.0, 24.0,
+        default_val=1.0, min_val=0.01, max_val=64.0, step=0.1, digits=2,
+    )
+    try:
+        mp_tile_x_spin.set_min_value(0.01)
+        mp_tile_x_spin.set_max_value(64.0)
+        mp_tile_x_spin.set_min_slider_value(0.05)
+        mp_tile_x_spin.set_max_slider_value(16.0)
+        mp_tile_x_spin.set_editor_property("delta", 0.1)
+        mp_tile_x_spin.set_editor_property("min_fractional_digits", 1)
+        mp_tile_x_spin.set_editor_property("max_fractional_digits", 2)
+        mp_tile_x_spin.set_tool_tip_text("Horizontal UV Tiling (X) for the active Mesh Paint Channel (R/G/B/A)")
+    except Exception:
+        pass
+    _place_on_canvas(canvas, mp_tile_x_spin, 52.0, 2701.0, 72.0, 24.0, apply_layout=apply_layout)
 
-        _setup_named_label(
-            w, is_wt, canvas, "MeshPaintTileYLabel",
-            "Tile Y:",
-            130.0, 2705.0, 38.0, 14.0,
-            size=8, bold=True, color=(0.58, 0.96, 0.68, 1.0),
-            apply_layout=True,
-        )
-        mp_tile_y_spin = _create_inline_spinbox(
-            "Spin_MP_TileY", 168.0, 2701.0, 72.0, 24.0,
-            default_val=1.0, min_val=0.01, max_val=64.0, step=0.1, digits=2,
-        )
-        try:
-            mp_tile_y_spin.set_min_value(0.01)
-            mp_tile_y_spin.set_max_value(64.0)
-            mp_tile_y_spin.set_min_slider_value(0.05)
-            mp_tile_y_spin.set_max_slider_value(16.0)
-            mp_tile_y_spin.set_editor_property("delta", 0.1)
-            mp_tile_y_spin.set_editor_property("min_fractional_digits", 1)
-            mp_tile_y_spin.set_editor_property("max_fractional_digits", 2)
-            mp_tile_y_spin.set_tool_tip_text("Vertical UV Tiling (Y) for the active Mesh Paint Channel (R/G/B/A)")
-        except Exception:
-            pass
-        _place_on_canvas(canvas, mp_tile_y_spin, 168.0, 2701.0, 72.0, 24.0, apply_layout=True)
+    _setup_named_label(
+        w, is_wt, canvas, "MeshPaintTileYLabel",
+        "Tile Y:",
+        130.0, 2705.0, 38.0, 14.0,
+        size=8, bold=True, color=(0.58, 0.96, 0.68, 1.0),
+        apply_layout=apply_layout,
+    )
+    mp_tile_y_spin = _create_inline_spinbox(
+        "Spin_MP_TileY", 168.0, 2701.0, 72.0, 24.0,
+        default_val=1.0, min_val=0.01, max_val=64.0, step=0.1, digits=2,
+    )
+    try:
+        mp_tile_y_spin.set_min_value(0.01)
+        mp_tile_y_spin.set_max_value(64.0)
+        mp_tile_y_spin.set_min_slider_value(0.05)
+        mp_tile_y_spin.set_max_slider_value(16.0)
+        mp_tile_y_spin.set_editor_property("delta", 0.1)
+        mp_tile_y_spin.set_editor_property("min_fractional_digits", 1)
+        mp_tile_y_spin.set_editor_property("max_fractional_digits", 2)
+        mp_tile_y_spin.set_tool_tip_text("Vertical UV Tiling (Y) for the active Mesh Paint Channel (R/G/B/A)")
+    except Exception:
+        pass
+    _place_on_canvas(canvas, mp_tile_y_spin, 168.0, 2701.0, 72.0, 24.0, apply_layout=apply_layout)
 
-        reset_mp_tile_btn = _setup_named_button(
-            w, is_wt, canvas, "ResetMPTileBtn", "ResetMPTileBtnLabel",
-            "1:1",
-            244.0, 2701.0, 46.0, 24.0,
-            color=(0.82, 0.90, 1.0, 1.0),
-            apply_layout=True,
-            tooltip="Reset active Mesh Paint Channel's Tile X and Tile Y back to 1.0 x 1.0",
-        )
+    reset_mp_tile_btn = _setup_named_button(
+        w, is_wt, canvas, "ResetMPTileBtn", "ResetMPTileBtnLabel",
+        "1:1",
+        244.0, 2701.0, 46.0, 24.0,
+        color=(0.82, 0.90, 1.0, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Reset active Mesh Paint Channel's Tile X and Tile Y back to 1.0 x 1.0",
+    )
 
-        reset_all_mp_btn = _setup_named_button(
-            w, is_wt, canvas, "ResetAllMeshPaintBtn", "ResetAllMeshPaintBtnLabel",
-            "Reset All",
-            294.0, 2701.0, 110.0, 24.0,
-            color=(1.0, 0.56, 0.48, 1.0),
-            apply_layout=True,
-            tooltip="Reset all 4 Mesh Paint Brush Layers (R/G/B/A textures, enable states, X/Y tiling & painted masks) back to clean defaults",
-        )
+    reset_all_mp_btn = _setup_named_button(
+        w, is_wt, canvas, "ResetAllMeshPaintBtn", "ResetAllMeshPaintBtnLabel",
+        "Reset All",
+        294.0, 2701.0, 110.0, 24.0,
+        color=(1.0, 0.56, 0.48, 1.0),
+        apply_layout=apply_layout,
+        tooltip="Reset all 4 Mesh Paint Brush Layers (R/G/B/A textures, enable states, X/Y tiling & painted masks) back to clean defaults",
+    )
 
     _setup_named_label(
         w, is_wt, canvas, "PresetLibHeaderLabel",
@@ -14470,7 +14739,7 @@ def run_reference_workflow(
         )
         return
 
-    if not _check_can_generate_or_prompt_buy(1):
+    if not _check_can_generate_or_prompt_buy(1, job_label="PBR Material from Reference"):
         return
 
     if "Direct CHORD" in ref_mode_label:
@@ -14533,10 +14802,11 @@ def run_reference_workflow(
 
     def _worker():
         try:
-            plugin_dir = r"D:\AI\MyAiAssistant\Corona_ComfyUI_PBR_Plugin"
-            if plugin_dir not in sys.path and os.path.exists(plugin_dir):
-                sys.path.insert(0, plugin_dir)
+            for plugin_dir in (_SCRIPT_DIR, r"D:\AI\MyAiAssistant\Corona_ComfyUI_PBR_Plugin"):
+                if plugin_dir not in sys.path and os.path.exists(plugin_dir):
+                    sys.path.insert(0, plugin_dir)
             import comfy_to_corona as c2c
+            c2c.COMFY_URL = COMFY_URL
 
             if ref_mode == "ai_vision_pbr":
                 extracted = c2c.extract_materials_from_reference_image(ref_clean, target_hint=prompt_hint)
@@ -14579,7 +14849,7 @@ def run_reference_workflow(
             req = urllib.request.Request(
                 f"{COMFY_URL}/prompt",
                 data=json.dumps({"prompt": workflow}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers=_comfy_headers({"Content-Type": "application/json"}),
             )
             with urllib.request.urlopen(req, timeout=10.0) as resp:
                 res_data = json.loads(resp.read().decode("utf-8"))
@@ -14594,7 +14864,7 @@ def run_reference_workflow(
                     break
 
                 try:
-                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                    with _comfy_get(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
                         history = json.loads(h_resp.read().decode("utf-8"))
                     if prompt_id in history:
                         entry = history[prompt_id]
@@ -14647,7 +14917,7 @@ def run_reference_workflow(
                                         "type": image.get("type", "output"),
                                     }
                                 )
-                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                img_bytes = _comfy_get(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
                                 clean_filename = f"T_{asset_base_name}_{kind.capitalize()}.png"
                                 local_path = os.path.join(temp_dir, clean_filename)
                                 with open(local_path, "wb") as out_f:
@@ -14743,11 +15013,13 @@ def run_reference_workflow(
         builtins._COMFY_JOB_RUNNING = False
 
         if state["error"] == "__CANCELLED__":
-            _set_panel_status("[Cancelled] Reference generation stopped by user.", color=(1.0, 0.55, 0.40, 1.0))
+            refund_prepaid_generation_credit(1, reason="user_cancelled")
+            _set_panel_status(f"[Cancelled] Reference generation stopped by user (Credits: {get_remaining_generations()} left).", color=(1.0, 0.55, 0.40, 1.0))
             return
         if state["error"]:
+            refund_prepaid_generation_credit(1, reason="generation_error")
             unreal.log_error(f"ComfyUI Reference PBR Error: {state['error']}")
-            _set_panel_status(f"[Error] {state['error']}", color=(1.0, 0.40, 0.40, 1.0))
+            _set_panel_status(f"[Error — Credit Refunded] {state['error']}", color=(1.0, 0.40, 0.40, 1.0))
             return
 
         try:
@@ -15107,17 +15379,18 @@ def run_workflow(
         )
         return
 
-    if not _check_can_generate_or_prompt_buy(1):
+    if getattr(builtins, "_COMFY_ACTIVE_PRESET_CAT", "") == "bw_mask":
+        bw_txts = {t_txt.strip().lower() for _t_lbl, t_txt in CATEGORY_PRESET_PROMPTS.get("bw_mask", []) if not _t_lbl.lower().startswith("decal")}
+        if (prompt_text or "").strip().lower() in bw_txts:
+            return run_mask_workflow(prompt_text=prompt_text, folder_path=folder_path, json_path=json_path)
+
+    if not _check_can_generate_or_prompt_buy(1, job_label="PBR Material"):
         return
 
     ue_import_path = _normalize_ue_folder(folder_path)
     if ue_import_path.split("/")[-1].lower() in [c.lower() for c in MATERIAL_CATEGORIES] or ue_import_path.split("/")[-1] in (TEXTURES_SUBFOLDER, MASKS_SUBFOLDER):
         ue_import_path = "/".join(ue_import_path.split("/")[:-1]) or DEFAULT_UE_FOLDER
     _ensure_folder_structure(ue_import_path)
-    if getattr(builtins, "_COMFY_ACTIVE_PRESET_CAT", "") == "bw_mask":
-        bw_txts = {t_txt.strip().lower() for _t_lbl, t_txt in CATEGORY_PRESET_PROMPTS.get("bw_mask", []) if not _t_lbl.lower().startswith("decal")}
-        if (prompt_text or "").strip().lower() in bw_txts:
-            return run_mask_workflow(prompt_text=prompt_text, folder_path=folder_path, json_path=json_path)
     selected_mm_path = _get_selected_prompt_master_material_path(ue_import_path)
     res_px, res_tag = _get_selected_resolution()
     model_label, pipeline_mode, ckpt_name = _get_selected_pbr_model()
@@ -15452,7 +15725,7 @@ def run_workflow(
             req = urllib.request.Request(
                 f"{COMFY_URL}/prompt",
                 data=json.dumps({"prompt": workflow}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers=_comfy_headers({"Content-Type": "application/json"}),
             )
             with urllib.request.urlopen(req, timeout=10.0) as resp:
                 res_data = json.loads(resp.read().decode("utf-8"))
@@ -15467,7 +15740,7 @@ def run_workflow(
                     break
 
                 try:
-                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                    with _comfy_get(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
                         history = json.loads(h_resp.read().decode("utf-8"))
                     if prompt_id in history:
                         entry = history[prompt_id]
@@ -15520,7 +15793,7 @@ def run_workflow(
                                         "type": image.get("type", "output"),
                                     }
                                 )
-                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                img_bytes = _comfy_get(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
                                 clean_filename = f"T_{asset_base_name}_{kind.capitalize()}.png"
                                 local_path = os.path.join(temp_dir, clean_filename)
                                 with open(local_path, "wb") as out_f:
@@ -15575,7 +15848,7 @@ def run_workflow(
                             free_req = urllib.request.Request(
                                 f"{COMFY_URL}/free",
                                 data=b'{"unload_models": false, "free_memory": true}',
-                                headers={"Content-Type": "application/json"},
+                                headers=_comfy_headers({"Content-Type": "application/json"}),
                                 method="POST",
                             )
                             urllib.request.urlopen(free_req, timeout=3.0).read()
@@ -15627,11 +15900,13 @@ def run_workflow(
         builtins._COMFY_JOB_RUNNING = False
 
         if state["error"] == "__CANCELLED__":
-            _set_panel_status("[Cancelled] Generation stopped by user.", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
+            refund_prepaid_generation_credit(1, reason="user_cancelled")
+            _set_panel_status(f"[Cancelled] Generation stopped by user (Credits: {get_remaining_generations()} left).", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
             return
         if state["error"]:
+            refund_prepaid_generation_credit(1, reason="generation_error")
             unreal.log_error(f"ComfyUI PBR Error: {state['error']}")
-            _set_panel_status(f"[Error] {state['error']}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+            _set_panel_status(f"[Error — Credit Refunded] {state['error']}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
             return
 
         try:
@@ -15760,7 +16035,7 @@ def run_mask_workflow(
         )
         return
 
-    if not _check_can_generate_or_prompt_buy(1):
+    if not _check_can_generate_or_prompt_buy(1, job_label="B&W Blend Mask"):
         return
 
     ue_import_path = _normalize_ue_folder(folder_path)
@@ -15868,7 +16143,7 @@ def run_mask_workflow(
             req = urllib.request.Request(
                 f"{COMFY_URL}/prompt",
                 data=json.dumps({"prompt": workflow}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers=_comfy_headers({"Content-Type": "application/json"}),
             )
             with urllib.request.urlopen(req, timeout=10.0) as resp:
                 res_data = json.loads(resp.read().decode("utf-8"))
@@ -15882,7 +16157,7 @@ def run_mask_workflow(
                     state["error"] = "ComfyUI mask generation timed out (1800 sec)"
                     break
                 try:
-                    with urllib.request.urlopen(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
+                    with _comfy_get(f"{COMFY_URL}/history/{prompt_id}", timeout=5.0) as h_resp:
                         history = json.loads(h_resp.read().decode("utf-8"))
                     if prompt_id in history:
                         entry = history[prompt_id]
@@ -15902,7 +16177,7 @@ def run_mask_workflow(
                                         "type": image.get("type", "output"),
                                     }
                                 )
-                                img_bytes = urllib.request.urlopen(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
+                                img_bytes = _comfy_get(f"{COMFY_URL}/view?{params}", timeout=15.0).read()
                                 local_path = os.path.join(temp_dir, f"{mask_asset_name}.png")
                                 with open(local_path, "wb") as out_f:
                                     out_f.write(img_bytes)
@@ -15954,12 +16229,14 @@ def run_mask_workflow(
         builtins._COMFY_JOB_RUNNING = False
 
         if state["error"] == "__CANCELLED__":
-            _set_panel_status("[Cancelled] Mask generation stopped by user.", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
+            refund_prepaid_generation_credit(1, reason="user_cancelled")
+            _set_panel_status(f"[Cancelled] Mask generation stopped by user (Credits: {get_remaining_generations()} left).", "GENERATE PBR", color=(1.0, 0.55, 0.40, 1.0))
             return
         if state["error"] or not state["local_path"]:
+            refund_prepaid_generation_credit(1, reason="generation_error")
             err = state["error"] or "No mask image returned from ComfyUI"
             unreal.log_error(f"ComfyUI B&W Mask Error: {err}")
-            _set_panel_status(f"[Error] {err}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
+            _set_panel_status(f"[Error — Credit Refunded] {err}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
             return
 
         try:
