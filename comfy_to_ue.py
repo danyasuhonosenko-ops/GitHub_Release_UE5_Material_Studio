@@ -536,15 +536,40 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
     return True, f"Saved License Key '{key_clean[:12]}...'. Ready for cloud verification (Balance: {st.get('credits', 0)} Gens)."
 
 
+def copy_instance_id_to_clipboard() -> str:
+    """Copies the machine's unique Copy ID (`PBR-XXXXXX-XXXXXX`) to the Windows clipboard for support requests."""
+    inst_id = get_instance_fingerprint()
+    try:
+        import subprocess
+        subprocess.run(
+            ["clip"],
+            input=inst_id.encode("utf-8"),
+            check=False,
+            creationflags=0x08000000,
+        )
+    except Exception:
+        pass
+    try:
+        _set_panel_status(
+            f"[Support Copy ID] Copied '{inst_id}' to clipboard! Share this ID when contacting support.",
+            color=(0.56, 0.88, 1.0, 1.0),
+        )
+    except Exception:
+        pass
+    return inst_id
+
+
 def _show_low_generations_popup(remaining: int) -> None:
     """Shows a native English Unreal Engine warning dialog when credits drop to <= 10."""
+    inst_id = get_instance_fingerprint()
     try:
         unreal.EditorDialog.show_message(
             "Low AI Generation Credits Warning",
             (
                 f"You have {remaining} AI Generation credits remaining (<= {LOW_GENERATIONS_WARNING_THRESHOLD} left).\n\n"
                 "Please make sure you have enough credits to convert all Corona materials from your 3ds Max scene into Unreal Engine.\n\n"
-                "You can top up your balance anytime via '+ Buy Generations' or by entering a 12-Word Seed Key."
+                "You can top up your balance anytime via '+ Buy Generations' or by entering a 12-Word Seed Key.\n\n"
+                f"Support Copy ID: {inst_id}"
             ),
             unreal.AppMsgType.OK,
         )
@@ -554,6 +579,7 @@ def _show_low_generations_popup(remaining: int) -> None:
 
 def _show_zero_generations_popup() -> None:
     """Shows a native English Unreal Engine modal dialog when 0 generations remain, offering a 1-click redirect to + Buy Generations."""
+    inst_id = get_instance_fingerprint()
     try:
         res = unreal.EditorDialog.show_message(
             "Out of AI Generation Credits (0 Left)",
@@ -561,7 +587,8 @@ def _show_zero_generations_popup() -> None:
                 "You have 0 AI Generation credits remaining!\n\n"
                 "Please make sure you have enough credits to convert all Corona materials from your 3ds Max scene into Unreal Engine.\n\n"
                 "• Enter a 12-Word Seed Key in the '12-Word Seed / Key...' box\n"
-                "• Or click 'Yes' to open the '+ Buy Generations' page in your browser."
+                "• Or click 'Yes' to open the '+ Buy Generations' page in your browser.\n\n"
+                f"Support Copy ID: {inst_id}"
             ),
             unreal.AppMsgType.YES_NO,
         )
@@ -9441,15 +9468,16 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     _setup_named_label(
         w, is_wt, canvas, "HeaderTitleLabel",
         "ComfyUI PBR & Substance Studio",
-        14.0, 5.0, 258.0, 16.0,
+        14.0, 5.0, 296.0, 16.0,
         size=10, bold=True, color=(0.95, 0.96, 1.0, 1.0),
         apply_layout=True,
     )
+    inst_id_hdr = get_instance_fingerprint()
     _setup_named_label(
         w, is_wt, canvas, "HeaderSubtitleLabel",
-        "Ubisoft CHORD / DA2 PBR • 368 Presets",
-        14.0, 23.0, 258.0, 14.0,
-        size=8, bold=False, color=(0.62, 0.65, 0.72, 1.0),
+        f"Copy ID: {inst_id_hdr}",
+        14.0, 23.0, 158.0, 14.0,
+        size=8, bold=True, color=(0.58, 0.84, 1.0, 1.0),
         apply_layout=True,
     )
 
@@ -9461,6 +9489,14 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
                 old_hdr_badge.set_visibility(unreal.SlateVisibility.COLLAPSED)
             except Exception:
                 pass
+        copy_id_btn = _setup_named_button(
+            w, is_wt, canvas, "CopyInstanceIdBtn", "CopyInstanceIdBtnLabel",
+            "Copy ID",
+            174.0, 20.0, 58.0, 18.0,
+            color=(0.68, 0.88, 1.0, 1.0),
+            apply_layout=True,
+            tooltip=f"Click to copy your Support Copy ID ({inst_id_hdr}) to clipboard",
+        )
         hdr_donate_btn = _setup_named_button(
             w, is_wt, canvas, "HeaderBuyGenBtn", "HeaderBuyGenBtnLabel",
             "Donate",
@@ -9470,6 +9506,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             tooltip="Support the project with a donation (opens donation page in your browser)",
         )
         builtins._COMFY_HDR_GEN_BADGE = None
+        builtins._COMFY_COPY_ID_BTN = copy_id_btn
         builtins._COMFY_HDR_DONATE_BTN = hdr_donate_btn
 
     # === Section 1: Prompt + Target Master Material Selector + GENERATE PBR / B&W MASK / STOP Buttons ===
@@ -9707,20 +9744,26 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         def _on_donate_clicked():
             open_donate_url()
 
+        def _on_copy_id_clicked():
+            copy_instance_id_to_clipboard()
+
         _clear_delegate_safe(lic_key_box.on_text_changed)
         _clear_delegate_safe(lic_key_box.on_text_committed)
         _clear_delegate_safe(buy_gens_btn.on_clicked)
         _clear_delegate_safe(hdr_donate_btn.on_clicked)
+        _clear_delegate_safe(copy_id_btn.on_clicked)
         lic_key_box.on_text_changed.add_callable(_on_license_key_changed)
         lic_key_box.on_text_committed.add_callable(_on_license_key_committed)
         buy_gens_btn.on_clicked.add_callable(_on_buy_generations_clicked)
         hdr_donate_btn.on_clicked.add_callable(_on_donate_clicked)
+        copy_id_btn.on_clicked.add_callable(_on_copy_id_clicked)
         builtins._COMFY_BTN_REFS.extend(
             [
                 (lic_key_box, _on_license_key_changed),
                 (lic_key_box, _on_license_key_committed),
                 (buy_gens_btn, _on_buy_generations_clicked),
                 (hdr_donate_btn, _on_donate_clicked),
+                (copy_id_btn, _on_copy_id_clicked),
             ]
         )
         send_ledger_audit_heartbeat("panel_init")
