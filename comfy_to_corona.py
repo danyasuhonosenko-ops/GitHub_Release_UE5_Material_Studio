@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 ComfyUI Corona PBR Studio for Autodesk 3ds Max & Corona Renderer
 ================================================================
 Generates seamless 5-map PBR textures (Albedo, Normal, Roughness, Metallic, Height)
-via ComfyUI (Ubisoft CHORD / DepthAnything V2 + RealVisXL V5 / SDXL 1.0) from:
+via ComfyUI (AI 5-Map PBR Engine / DepthAnything V2 + RealVisXL V5 / SDXL 1.0) from:
   1. Text Prompt (Russian or English) or 289 Built-in Material Presets (12 Categories)
   2. Reference Image (Direct CHORD Photo-to-PBR, Seamless Img2Img + CHORD, or AI Vision Reference Extractor)
   3. Full Interior Reference Photo (AI extracts all room materials -> 1-click CoronaPhysicalMtl generation)
@@ -446,7 +446,7 @@ def extract_materials_from_reference_image(
     )
 
     system_prompt = (
-        "Ты — ведущий 3D-художник и специалист по шейдерам Corona Renderer (CoronaPhysicalMtl) и генерации бесшовных текстур в SDXL + Ubisoft CHORD.\n"
+        "Ты — ведущий 3D-художник и специалист по шейдерам Corona Renderer (CoronaPhysicalMtl) и генерации бесшовных текстур в SDXL + AI 5-Map PBR Engine.\n"
         f"{hint_instruction}\n"
         "Верни СТРОГО валидный JSON-массив объектов (без markdown-обертки), где каждый объект имеет поля:\n"
         '- "title_ru": краткое понятное название материала на русском (например, "Светлый травертин с порами", "Французский дуб ёлочкой", "Бежевое букле дивана")\n'
@@ -553,11 +553,11 @@ def _build_reference_pbr_workflow(
     """
     Builds a ComfyUI workflow for Reference Image -> Corona PBR:
       - ref_mode == 'chord_direct':
-          Directly feeds the uploaded photo into ImageScale -> EnhanceDetail -> Ubisoft CHORD
+          Directly feeds the uploaded photo into ImageScale -> EnhanceDetail -> AI 5-Map PBR Engine
           (extracts de-lit Albedo, Normal, Roughness, Metallic, Height directly from the reference photo).
       - ref_mode == 'img2img_seamless':
           Loads the reference image -> scales to 1024x1024 -> VAEEncode -> SeamlessTile KSampler (denoise)
-          -> CircularVAEDecode -> EnhanceDetail -> Ubisoft CHORD (creates a 100% seamless tileable texture
+          -> CircularVAEDecode -> EnhanceDetail -> AI 5-Map PBR Engine (creates a 100% seamless tileable texture
           preserving the color/structure of the reference photo!).
     """
     if ref_mode == "chord_direct":
@@ -653,7 +653,7 @@ def _attach_pbr_decomposition_nodes(
     res_px: int = 1024,
     pipeline_mode: str = "chord",
 ) -> None:
-    """Attaches either Ubisoft CHORD (5-map) or DepthAnything V2 (4-map) nodes to `workflow`."""
+    """Attaches either AI 5-Map PBR Engine (5-map) or DepthAnything V2 (4-map) nodes to `workflow`."""
     if pipeline_mode == "chord":
         for old_id in ("78", "79", "81", "83", "84", "108", "109"):
             workflow.pop(old_id, None)
@@ -1113,7 +1113,7 @@ def generate_corona_pbr_from_prompt(
     """
     End-to-end pipeline:
       1. Translates/cleans `prompt_text` and detects category.
-      2. Runs SDXL + SeamlessTile + Ubisoft CHORD (or DepthAnything V2) in ComfyUI.
+      2. Runs SDXL + SeamlessTile + AI 5-Map PBR Engine (or DepthAnything V2) in ComfyUI.
       3. Saves the 5 PBR maps into `D:\\AI\\MyAiAssistant\\3D_Library\\Corona_PBR_Materials\\<category>\\<material_name>\\`.
       4. Builds `CoronaPhysicalMtl` in 3ds Max, puts it in `meditMaterials[medit_slot]`, and applies to `selection`.
     """
@@ -1191,9 +1191,9 @@ def generate_corona_pbr_from_reference(
 ) -> Dict[str, Any]:
     """
     Generates a Corona PBR material from a Reference Image (`reference_image_path`) in one of 3 modes:
-      - `chord_direct`: Direct photo-to-PBR decomposition via Ubisoft CHORD (`ChordMaterialEstimation`).
+      - `chord_direct`: Direct photo-to-PBR decomposition via AI 5-Map PBR Engine (`ChordMaterialEstimation`).
       - `img2img_seamless`: Uploads reference photo to ComfyUI, runs SeamlessTile SDXL Img2Img (`denoise`),
-        then decomposes into 5 PBR maps via Ubisoft CHORD.
+        then decomposes into 5 PBR maps via AI 5-Map PBR Engine.
       - `ai_vision_pbr`: Uses Gemini Vision to extract the exact material prompt & physical parameters from
         the reference image, then generates seamless 5-map PBR textures in ComfyUI.
     """
@@ -1432,9 +1432,9 @@ def launch_corona_pbr_studio() -> None:
     ttk.Label(ref_mode_row, text="Режим референса:", style="Card.TLabel").pack(side="left", padx=(0, 8))
 
     REF_MODES = [
-        ("Бесшовный по фото (SDXL Img2Img + CHORD 5 карт)", "img2img_seamless"),
-        ("Прямое извлечение карт из фото (Ubisoft CHORD Direct)", "chord_direct"),
-        ("AI Vision описание референса -> CHORD PBR", "ai_vision_pbr"),
+        ("Бесшовный по фото (SDXL Img2Img + 5-Map PBR)", "img2img_seamless"),
+        ("Прямое извлечение карт из фото (AI 5-Map PBR Engine Direct)", "chord_direct"),
+        ("AI Vision описание референса -> 5-Map PBR", "ai_vision_pbr"),
     ]
     ref_mode_var = tk.StringVar(value=REF_MODES[0][0])
     ref_mode_combo = ttk.Combobox(

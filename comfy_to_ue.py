@@ -1,4 +1,4 @@
-import builtins
+﻿import builtins
 import hashlib
 import json
 import math
@@ -966,12 +966,12 @@ RESOLUTION_OPTIONS = [
 DEFAULT_RESOLUTION_LABEL = "1024x1024 (1K Standard)"
 
 PBR_MODEL_OPTIONS = [
-    ("Ubisoft CHORD + RealVisXL V5 (True PBR)", "chord", "SDXL\\realvisxlV50_v50Bakedvae.safetensors"),
-    ("Ubisoft CHORD + SDXL 1.0 (True PBR)", "chord", "SDXL\\sd_xl_base_1.0.safetensors"),
-    ("DepthAnything V2 + RealVisXL V5 (Fast)", "da2", "SDXL\\realvisxlV50_v50Bakedvae.safetensors"),
-    ("DepthAnything V2 + SDXL 1.0 (Fast)", "da2", "SDXL\\sd_xl_base_1.0.safetensors"),
+    ("AI 5-Map PBR Engine + RealVisXL V5 (True PBR)", "chord", "SDXL\\realvisxlV50_v50Bakedvae.safetensors"),
+    ("AI 5-Map PBR Engine + SDXL 1.0 (True PBR)", "chord", "SDXL\\sd_xl_base_1.0.safetensors"),
+    ("Depth Engine + RealVisXL V5 (Fast)", "da2", "SDXL\\realvisxlV50_v50Bakedvae.safetensors"),
+    ("Depth Engine + SDXL 1.0 (Fast)", "da2", "SDXL\\sd_xl_base_1.0.safetensors"),
 ]
-DEFAULT_PBR_MODEL_LABEL = "Ubisoft CHORD + RealVisXL V5 (True PBR)"
+DEFAULT_PBR_MODEL_LABEL = "AI 5-Map PBR Engine + RealVisXL V5 (True PBR)"
 
 CATEGORY_KEYWORDS = {
     "wood": (
@@ -5963,7 +5963,7 @@ def _get_selected_resolution() -> tuple:
 
 
 def _get_selected_pbr_model() -> tuple:
-    """Returns the default (model_label, pipeline_mode, ckpt_name) locked to Ubisoft CHORD + RealVisXL V5."""
+    """Returns the default (model_label, pipeline_mode, ckpt_name) locked to AI 5-Map PBR Engine + RealVisXL V5."""
     builtins._COMFY_MODEL_LABEL = DEFAULT_PBR_MODEL_LABEL
     return PBR_MODEL_OPTIONS[0]
 
@@ -8174,7 +8174,7 @@ def generate_displacement_in_comfy_for_active_mi(
         )
         return
 
-    if not _check_can_generate_or_prompt_buy(1, job_label="CHORD Displacement Height Map"):
+    if not _check_can_generate_or_prompt_buy(1, job_label="AI Displacement Height Map"):
         return False
 
     ue_import_path = _normalize_ue_folder(ue_folder)
@@ -10205,9 +10205,9 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     cur_rm_sel = str(ref_mode_combo.get_selected_option() or "").strip()
     ref_mode_combo.clear_options()
     ref_mode_options = [
-        "Seamless Img2Img + CHORD (5 Maps)",
-        "Direct CHORD from Photo (De-lit)",
-        "AI Vision Prompt + CHORD",
+        "Seamless Img2Img + 5-Map PBR",
+        "Direct 5-Map PBR from Photo (De-lit)",
+        "AI Vision Prompt + 5-Map PBR",
     ]
     for rm_opt in ref_mode_options:
         ref_mode_combo.add_option(rm_opt)
@@ -10319,7 +10319,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
 
         def _on_gen_ref_clicked():
             r_path = str(ref_path_box.get_text() or "").strip()
-            r_mode_lbl = str(ref_mode_combo.get_selected_option() or "Seamless Img2Img + CHORD (5 Maps)").strip()
+            r_mode_lbl = str(ref_mode_combo.get_selected_option() or "Seamless Img2Img + 5-Map PBR").strip()
             r_denoise = float(ref_denoise_sb.get_value()) if ref_denoise_sb else 0.52
             p_hint = str(prompt_box.get_text() or "").strip() if prompt_box else ""
             f_txt = str(path_box.get_text() or DEFAULT_UE_FOLDER).strip() if path_box else DEFAULT_UE_FOLDER
@@ -10649,7 +10649,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         res_combo.on_selection_changed.add_callable(_on_res_changed)
         builtins._COMFY_BTN_REFS.append((res_combo, _on_res_changed))
 
-    # AI PBR Model / Pipeline selector removed from UI — locked to default pipeline (Ubisoft CHORD + RealVisXL V5)
+    # AI PBR Model / Pipeline selector removed from UI — locked to default pipeline (AI 5-Map PBR Engine + RealVisXL V5)
     for old_m_name in ("AIModelLabel", "AIModelComboBox"):
         old_m_w = _find_widget_any(w, is_wt, old_m_name)
         if old_m_w:
@@ -14813,7 +14813,7 @@ def _browse_reference_image_dialog() -> str:
 
 def run_reference_workflow(
     ref_image_path: str = "",
-    ref_mode_label: str = "Seamless Img2Img + CHORD (5 Maps)",
+    ref_mode_label: str = "Seamless Img2Img + 5-Map PBR",
     prompt_hint: str = "",
     denoise: float = 0.52,
     folder_path: str = DEFAULT_UE_FOLDER,
@@ -14821,12 +14821,12 @@ def run_reference_workflow(
 ) -> None:
     """
     Non-blocking generation of a seamless 5-map PBR Material in ComfyUI from a Reference Image:
-    - 'Seamless Img2Img + CHORD (5 Maps)': Pre-processes reference into a periodic de-lit tile ->
-      SDXL Circular VAE + SeamlessTile Img2Img -> Ubisoft CHORD 5-map decomposition.
-    - 'Direct CHORD from Photo (De-lit)': Pre-processes reference into a periodic de-lit tile ->
-      Ubisoft CHORD 5-map decomposition directly from photo.
-    - 'AI Vision Prompt + CHORD': Uses Gemini Vision to extract detailed surface prompt from photo ->
-      SDXL Seamless Text-to-PBR + Ubisoft CHORD.
+    - 'Seamless Img2Img + 5-Map PBR': Pre-processes reference into a periodic de-lit tile ->
+      SDXL Circular VAE + SeamlessTile Img2Img -> 5-map PBR decomposition.
+    - 'Direct 5-Map PBR from Photo (De-lit)': Pre-processes reference into a periodic de-lit tile ->
+      5-map PBR decomposition directly from photo.
+    - 'AI Vision Prompt + 5-Map PBR': Uses Gemini Vision to extract detailed surface prompt from photo ->
+      SDXL Seamless Text-to-PBR + 5-map PBR decomposition.
     """
     panel = _get_open_panel_widget()
     if getattr(builtins, "_COMFY_ENHANCED_WIDGET_ID", None) != id(panel):
@@ -14850,7 +14850,7 @@ def run_reference_workflow(
     if not _check_can_generate_or_prompt_buy(1, job_label="PBR Material from Reference"):
         return
 
-    if "Direct CHORD" in ref_mode_label:
+    if "Direct" in ref_mode_label:
         ref_mode = "chord_direct"
     elif "AI Vision" in ref_mode_label:
         ref_mode = "ai_vision_pbr"
@@ -14883,7 +14883,7 @@ def run_reference_workflow(
     else:
         mat_category = _detect_material_category(prompt_hint or ref_stem, prompt_hint or ref_stem)
     builtins._COMFY_MASTER_MAT_PATH = selected_mm_path
-    pipe_short = "Ubisoft CHORD" if pipeline_mode == "chord" else "DepthAnything V2"
+    pipe_short = "AI 5-Map PBR" if pipeline_mode == "chord" else "Depth PBR"
 
     state = {
         "done": False,
@@ -15627,7 +15627,7 @@ def run_workflow(
         if "73" in workflow and "inputs" in workflow["73"]:
             workflow["73"]["inputs"]["text"] = full_negative
 
-        # SDXL and Ubisoft CHORD both work natively at 1024x1024 (CHORD internally resizes any input to 1024),
+        # SDXL and AI 5-Map PBR Engine both work natively at 1024x1024 (CHORD internally resizes any input to 1024),
         # so we always generate at 1024 and only downscale the final maps for 512 (faster & sharper than a 512 latent).
         base_latent_res = 1024
         if "77" in workflow and "inputs" in workflow["77"]:
@@ -15635,7 +15635,7 @@ def run_workflow(
             workflow["77"]["inputs"]["height"] = base_latent_res
 
         if pipeline_mode == "chord":
-            # Ubisoft CHORD PBR Decomposition Pipeline (ChordLoadModel -> ChordMaterialEstimation -> ChordNormalToHeight)
+            # AI 5-Map PBR Engine PBR Decomposition Pipeline (ChordLoadModel -> ChordMaterialEstimation -> ChordNormalToHeight)
             for old_id in ("78", "79", "81", "83", "84", "108", "109"):
                 workflow.pop(old_id, None)
 
@@ -15803,7 +15803,7 @@ def run_workflow(
         _set_panel_status(f"[JSON Error] {exc}", "GENERATE PBR", color=(1.0, 0.40, 0.40, 1.0))
         return
 
-    pipe_short = "Ubisoft CHORD" if pipeline_mode == "chord" else "DepthAnything V2"
+    pipe_short = "AI 5-Map PBR" if pipeline_mode == "chord" else "Depth PBR"
     state = {
         "done": False,
         "error": None,

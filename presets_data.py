@@ -7,12 +7,12 @@
 DEFAULT_RESOLUTION_LABEL = "1024x1024 (1K Standard)"
 
 PBR_MODEL_OPTIONS = [
-    ("Ubisoft CHORD + RealVisXL V5 (True PBR)", "chord", "SDXL\\realvisxlV50_v50Bakedvae.safetensors"),
-    ("Ubisoft CHORD + SDXL 1.0 (True PBR)", "chord", "SDXL\\sd_xl_base_1.0.safetensors"),
+    ("AI 5-Map PBR Engine + RealVisXL V5 (True PBR)", "chord", "SDXL\\realvisxlV50_v50Bakedvae.safetensors"),
+    ("AI 5-Map PBR Engine + SDXL 1.0 (True PBR)", "chord", "SDXL\\sd_xl_base_1.0.safetensors"),
     ("DepthAnything V2 + RealVisXL V5 (Fast)", "da2", "SDXL\\realvisxlV50_v50Bakedvae.safetensors"),
     ("DepthAnything V2 + SDXL 1.0 (Fast)", "da2", "SDXL\\sd_xl_base_1.0.safetensors"),
 ]
-DEFAULT_PBR_MODEL_LABEL = "Ubisoft CHORD + RealVisXL V5 (True PBR)"
+DEFAULT_PBR_MODEL_LABEL = "AI 5-Map PBR Engine + RealVisXL V5 (True PBR)"
 
 CATEGORY_KEYWORDS = {
     "wood": (

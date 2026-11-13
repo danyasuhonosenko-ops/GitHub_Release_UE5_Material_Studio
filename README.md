@@ -11,7 +11,7 @@
 **UE5 PBR Material Studio** is an all-in-one Python + Editor Utility Widget studio for **Unreal Engine 5** designed for ArchViz artists, environment artists, and level designers. It eliminates repetitive shader graphs and manual mesh preparation by combining multi-layer Corona-style material blending, Substance-style procedural tile/brick seams, anti-tiling, 4-channel viewport Mesh Paint, 1-click Deferred Decals, and geometric 3D displacement into a single dockable panel.
 
 > **Note on Cloud AI PBR Generation:**  
-> In this public GitHub release, **100% of the in-engine Material & Mesh Studio tools work out of the box** with your existing textures and Material Instances. Cloud AI Texture & Displacement Generation (Ubisoft CHORD 5-Map PBR & DepthAnything V2) is currently in **Closed Beta** — reach out to **Daniil Sukhnosenko on LinkedIn** to request a Beta API Key.
+> In this public GitHub release, **100% of the in-engine Material & Mesh Studio tools work out of the box** with your existing textures and Material Instances. Cloud AI Texture & Displacement Generation (5-Map PBR Decomposition & Depth Estimation) is powered by our remote GPU cluster.
 
 ### Key Features Available in Public Beta
 
@@ -73,8 +73,8 @@ comfy_to_ue.launch_comfy_studio()
 - **Mesh Paint Studio (`R / G / B / A`)**: рисование четырьмя PBR-слоями по мешу с независимым тайлингом `Tile X / Tile Y` для каждого канала.
 - **Генератор декалей (`Spawn Decal at Aim`)** и **3D-дисплейсмент (`Geometric 3D Subdiv + WPO` / `Parallax Only`)** с автоматическим подразделением низкополигональных стен и полов и возвратом исходной сетки (`Remove Disp`).
 
-> **Облачная AI-генерация текстур (Ubisoft CHORD / DepthAnything V2):**  
-> Функции облачной генерации с нуля и по фото-референсу находятся в закрытом бета-тесте. Напишите мне в **LinkedIn**, чтобы получить тестовый ключ доступа.
+> **Облачная AI-генерация текстур (5-Map PBR Decomposition Engine):**  
+> Функции облачной генерации с нуля и по фото-референсу работают через наш удалённый GPU-кластер.
 
 ---
 
