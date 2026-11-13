@@ -195,16 +195,119 @@ def open_buy_generations_url() -> str:
     return target_url
 
 
+# --- 12-Word Wallet-Style Cryptographic Seed Verifier (Public Key Only) ---
+_SEED_PUBLIC_N = 0xA0DE037D9C9846C16EA6114D
+_SEED_PUBLIC_E = 65537
+_SEED_TIER_CREDITS = {
+    0: 10,
+    1: 25,
+    2: 50,
+    3: 100,
+    4: 250,
+    5: 500,
+    6: 1000,
+    7: 2500,
+    8: 5000,
+    9: 10000,
+}
+_SEED_WORDLIST_256 = [
+    "abyss", "acorn", "agate", "albedo", "alchemy", "alloy", "alpine", "amber",
+    "amethyst", "anchor", "ancient", "anvil", "apex", "apogee", "aqua", "arcade",
+    "arch", "arctic", "argon", "armor", "arrow", "aspen", "astral", "atlas",
+    "atom", "atrium", "aurora", "autumn", "avalon", "axiom", "axis", "azure",
+    "bamboo", "basalt", "bastion", "beacon", "beryl", "bevel", "birch", "blade",
+    "blaze", "bloom", "boulder", "breeze", "brick", "bridge", "bronze", "brush",
+    "calcite", "calm", "canopy", "canvas", "canyon", "carbon", "carve", "cascade",
+    "castle", "catalyst", "cavern", "cedar", "celeste", "ceramic", "chalice", "chalk",
+    "channel", "chisel", "chrome", "cinder", "cipher", "circuit", "citadel", "citrine",
+    "clay", "cliff", "cloud", "clover", "cobalt", "comet", "compass", "concrete",
+    "conduit", "copper", "coral", "corona", "cortex", "cosmos", "crater", "crest",
+    "crimson", "crown", "crystal", "cube", "current", "cyber", "cypress", "dawn",
+    "delta", "denim", "desert", "dew", "diamond", "diffuse", "digital", "diode",
+    "displacement", "dome", "drift", "dune", "dusk", "dynamo", "ebony", "echo",
+    "eclipse", "eden", "elm", "ember", "emerald", "empire", "enigma", "epoch",
+    "equinox", "essence", "ether", "evergreen", "fabric", "facet", "falcon", "fern",
+    "fiber", "fjord", "flame", "flint", "flora", "flux", "foam", "focus",
+    "foliage", "forest", "forge", "fossil", "foundry", "fresco", "frost", "fusion",
+    "galaxy", "garnet", "gate", "genesis", "geode", "geyser", "glacier", "glade",
+    "glass", "gleam", "glint", "globe", "glow", "gold", "granite", "graphite",
+    "gravel", "grove", "gypsum", "halo", "harbor", "harmony", "harvest", "haven",
+    "hazel", "hearth", "heather", "helix", "hemisphere", "herald", "horizon", "horn",
+    "humidity", "hybrid", "hydra", "hyperion", "iceberg", "icon", "igneous", "impulse",
+    "indigo", "infinity", "ingot", "inlet", "ion", "iridium", "iris", "iron",
+    "island", "ivory", "jade", "jasper", "jet", "jewel", "jungle", "juniper",
+    "karma", "keel", "kelp", "kernel", "kiln", "kinetic", "kingdom", "knight",
+    "krypton", "lagoon", "lantern", "lapis", "larva", "laser", "lattice", "lava",
+    "laurel", "leather", "kevlar", "legend", "lens", "liberty", "lichen", "light",
+    "limestone", "linen", "liquid", "lithium", "loam", "lodestar", "lotus", "lumen",
+    "lunar", "luster", "lyric", "magma", "magnet", "mahogany", "malachite", "mantle",
+    "maple", "marble", "marina", "matrix", "meadow", "mercury", "meridian", "mesa",
+    "metal", "meteor", "mica", "mirage", "mirror", "mist", "monolith", "mosaic",
+]
+_SEED_WORD_TO_IDX = {w: idx for idx, w in enumerate(_SEED_WORDLIST_256)}
+
+
+def verify_12word_seed_phrase(phrase: str) -> tuple:
+    """
+    Verifies a 12-word wallet-style seed phrase using RSA-like public verification (`pow(S, 65537, N)`) + SHA-256 tag.
+    Returns (is_valid: bool, credits: int, serial_id: int, canonical_id: str, message: str).
+    """
+    tokens = [t.strip().lower() for t in (phrase or "").replace(",", " ").replace("-", " ").split() if t.strip()]
+    if len(tokens) != 12:
+        return False, 0, 0, "", f"Expected 12 seed words, got {len(tokens)}."
+    sig_val = 0
+    for tok in tokens:
+        idx = _SEED_WORD_TO_IDX.get(tok)
+        if idx is None:
+            return False, 0, 0, "", f"Unrecognized seed word '{tok}'."
+        sig_val = (sig_val << 8) | idx
+    if sig_val >= _SEED_PUBLIC_N:
+        return False, 0, 0, "", "Invalid 12-word cryptographic signature range."
+    m_val = pow(sig_val, _SEED_PUBLIC_E, _SEED_PUBLIC_N)
+    chk62 = m_val & ((1 << 62) - 1)
+    ser20 = (m_val >> 62) & ((1 << 20) - 1)
+    tier4 = (m_val >> 82) & 0xF
+    magic8 = (m_val >> 86) & 0xFF
+    if magic8 != 0x50:
+        return False, 0, 0, "", "Invalid 12-word seed signature."
+    raw = f"UE5_PBR_SEED_V2|{magic8:02X}|{tier4:01X}|{ser20:05X}".encode("utf-8")
+    expected_chk62 = int.from_bytes(hashlib.sha256(raw).digest()[:8], "big") & ((1 << 62) - 1)
+    if chk62 != expected_chk62:
+        return False, 0, 0, "", "12-word seed checksum verification failed."
+    credits = _SEED_TIER_CREDITS.get(tier4, 0)
+    if credits <= 0:
+        return False, 0, 0, "", "Unknown generation pack tier in 12-word seed."
+    canonical_id = f"SEED12-{tier4:X}-{ser20:05X}"
+    return True, credits, ser20, canonical_id, f"Verified 12-word wallet key (#{ser20}): +{credits} AI Generations!"
+
+
 def activate_license_or_promo_key(key_raw: str) -> tuple:
     """
-    Validates a promo/referral/license key entered into LicenseKeyBox (or ready for backend API verification).
-    Built-in offline test & referral codes work out-of-the-box; future API keys are saved into studio_license_state.json.
+    Validates a 12-word wallet seed phrase or promo/referral/license key entered into LicenseKeyBox.
     """
     key_clean = (key_raw or "").strip()
     if not key_clean:
-        return False, "Enter a License Key or Promo Code first, or click '+ Buy Generations'."
+        return False, "Enter a 12-word Seed Phrase or Promo Code first, or click '+ Buy Generations'."
     st = _load_studio_license_state()
     redeemed = list(st.get("redeemed_keys") or [])
+
+    # 1. Check if the user entered a multi-word Seed Phrase (e.g. 12 words separated by spaces)
+    word_tokens = [t.strip().lower() for t in key_clean.replace(",", " ").replace("-", " ").split() if t.strip()]
+    if len(word_tokens) >= 4:
+        ok_seed, seed_credits, seed_serial, seed_id, seed_msg = verify_12word_seed_phrase(key_clean)
+        if not ok_seed:
+            return False, seed_msg
+        if seed_id in redeemed:
+            return False, f"This 12-word seed key (Serial #{seed_serial}) was already redeemed."
+        redeemed.append(seed_id)
+        st["redeemed_keys"] = redeemed
+        st["license_key"] = seed_id
+        st["credits"] = max(0, int(st.get("credits", 0))) + seed_credits
+        _save_studio_license_state(st)
+        refresh_generations_ui()
+        return True, f"{seed_msg} (New Balance: {st['credits']} Gens)"
+
+    # 2. Check short promo codes
     key_up = key_clean.upper()
     promo_packs = {
         "BETA25": 25,
@@ -9212,15 +9315,13 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     # === License / Promo Key Input, AI Generations Counter & "+ Buy Generations" Redirect Row (Y = 126.5) ===
     if not is_wt:
         lic_key_box = _create_search_box(
-            "LicenseKeyBox", 14.0, 126.5, 136.0, "License / Promo Key...", height=22.0
+            "LicenseKeyBox", 14.0, 126.5, 136.0, "12-Word Seed / Key...", height=22.0
         )
         _place_on_canvas(canvas, lic_key_box, 14.0, 126.5, 136.0, 22.0, apply_layout=True)
         try:
-            saved_k = str(_load_studio_license_state().get("license_key") or "").strip()
-            if saved_k and not str(lic_key_box.get_text() or "").strip():
-                lic_key_box.set_text(saved_k)
+            lic_key_box.set_hint_text("12-Word Seed / Key...")
             lic_key_box.set_tool_tip_text(
-                "Enter your License Key or Promo / Referral Code (e.g. BETA25, LINKEDIN25) and press Enter"
+                "Paste your 12-Word Seed Key (or Promo Code) and press Enter to add AI Generations"
             )
         except Exception:
             pass
@@ -9241,7 +9342,7 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             278.0, 126.5, 126.0, 22.0,
             color=(1.0, 0.85, 0.32, 1.0),
             apply_layout=True,
-            tooltip="Open the payment page in your browser to purchase AI Generation packs (or activate a typed Promo / License Key)",
+            tooltip="Open the payment page in your browser to purchase AI Generation packs (or activate a pasted 12-Word Seed Key)",
         )
         builtins._COMFY_GEN_COUNT_LBL = gen_count_lbl
         builtins._COMFY_LICENSE_KEY_BOX = lic_key_box
@@ -9254,8 +9355,16 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             if not k_str:
                 return
             ok, msg = activate_license_or_promo_key(k_str)
+            if ok and lic_key_box:
+                try:
+                    builtins._COMFY_SYNCING_UI = True
+                    lic_key_box.set_text("")
+                except Exception:
+                    pass
+                finally:
+                    builtins._COMFY_SYNCING_UI = False
             _set_panel_status(
-                f"[License / Promo] {msg}",
+                f"[Seed / License] {msg}",
                 color=(0.45, 0.96, 0.65, 1.0) if ok else (1.0, 0.72, 0.32, 1.0),
             )
 
@@ -9263,10 +9372,19 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             typed_k = str(lic_key_box.get_text() or "").strip() if lic_key_box else ""
             st_now = _load_studio_license_state()
             redeemed_now = set(st_now.get("redeemed_keys") or [])
-            if typed_k and typed_k.upper() in ("BETA25", "LINKEDIN25", "WELCOME50", "STUDIO100", "PRO500") and typed_k.upper() not in redeemed_now:
+            word_cnt = len([t for t in typed_k.replace(",", " ").replace("-", " ").split() if t.strip()])
+            if word_cnt >= 4 or (typed_k and typed_k.upper() in ("BETA25", "LINKEDIN25", "WELCOME50", "STUDIO100", "PRO500") and typed_k.upper() not in redeemed_now):
                 ok, msg = activate_license_or_promo_key(typed_k)
+                if ok and lic_key_box:
+                    try:
+                        builtins._COMFY_SYNCING_UI = True
+                        lic_key_box.set_text("")
+                    except Exception:
+                        pass
+                    finally:
+                        builtins._COMFY_SYNCING_UI = False
                 _set_panel_status(
-                    f"[Promo Activated] {msg}",
+                    f"[Seed / Promo] {msg}",
                     color=(0.45, 0.96, 0.65, 1.0) if ok else (1.0, 0.72, 0.32, 1.0),
                 )
                 return
