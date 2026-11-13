@@ -9446,22 +9446,22 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
     )
 
     if not is_wt:
-        hdr_gen_badge = _setup_named_label(
-            w, is_wt, canvas, "HeaderGenerationsBadge",
-            "Support Indie Dev:",
-            280.0, 4.0, 124.0, 13.0,
-            size=8, bold=True, color=(1.0, 0.72, 0.86, 1.0),
-            apply_layout=True,
-        )
+        old_hdr_badge = _find_widget_any(w, is_wt, "HeaderGenerationsBadge")
+        if old_hdr_badge:
+            try:
+                old_hdr_badge.set_text("")
+                old_hdr_badge.set_visibility(unreal.SlateVisibility.COLLAPSED)
+            except Exception:
+                pass
         hdr_donate_btn = _setup_named_button(
             w, is_wt, canvas, "HeaderBuyGenBtn", "HeaderBuyGenBtnLabel",
-            "Donate / Support",
-            280.0, 18.0, 124.0, 20.0,
+            "Donate",
+            318.0, 10.0, 86.0, 22.0,
             color=(1.0, 0.58, 0.76, 1.0),
             apply_layout=True,
-            tooltip="Support the author with a donation (opens donation page in your browser)",
+            tooltip="Support the project with a donation (opens donation page in your browser)",
         )
-        builtins._COMFY_HDR_GEN_BADGE = hdr_gen_badge
+        builtins._COMFY_HDR_GEN_BADGE = None
         builtins._COMFY_HDR_DONATE_BTN = hdr_donate_btn
 
     # === Section 1: Prompt + Target Master Material Selector + GENERATE PBR / B&W MASK / STOP Buttons ===
