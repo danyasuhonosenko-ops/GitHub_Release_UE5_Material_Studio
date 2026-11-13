@@ -15639,14 +15639,14 @@ def run_workflow(
             for old_id in ("78", "79", "81", "83", "84", "108", "109"):
                 workflow.pop(old_id, None)
 
-            # CHORD natively resizes all 5 outputs (basecolor, normal, roughness, metalness, height)
+            # AI 5-Map PBR Engine natively resizes all 5 outputs (basecolor, normal, roughness, metalness, height)
             # to the resolution (ori_h, ori_w) of its input image while running its internal solver at 1024x1024.
             chord_img_input = ["102", 0]
             if res_px != 1024:
                 workflow["90"] = {
                     "class_type": "ImageScale",
                     "inputs": {
-                        "upscale_method": "nearest-exact" if res_px > 1024 else "area",
+                        "upscale_method": "lanczos" if res_px > 1024 else "area",
                         "width": res_px,
                         "height": res_px,
                         "crop": "disabled",
@@ -15683,8 +15683,21 @@ def run_workflow(
                     "normal": ["111", 1],
                 },
             }
+            albedo_out_ref = ["111", 0]
+            if res_px > 1024:
+                workflow["113"] = {
+                    "class_type": "EnhanceDetail",
+                    "inputs": {
+                        "images": ["111", 0],
+                        "filter_radius": 1,
+                        "sigma": 0.08,
+                        "denoise": 0.02,
+                        "detail_mult": 1.35,
+                    },
+                }
+                albedo_out_ref = ["113", 0]
             if "76" in workflow and "inputs" in workflow["76"]:
-                workflow["76"]["inputs"]["images"] = ["111", 0]
+                workflow["76"]["inputs"]["images"] = albedo_out_ref
                 workflow["76"]["inputs"]["filename_prefix"] = "api_albedo"
             if "82" in workflow and "inputs" in workflow["82"]:
                 workflow["82"]["inputs"]["images"] = ["111", 1]
@@ -15702,8 +15715,8 @@ def run_workflow(
                     "images": ["111", 3],
                 },
             }
-            # Run DepthAnything_V2 in parallel to fuse macro displacement with CHORD's micro normal-to-height
-            # (Skip extra ViT-L model load for Decals and Single-Leaf cutouts to avoid VRAM thrashing & 500s+ stalls)
+            # Run DepthAnything_V2 in parallel at native 1024x1024 to fuse macro displacement with micro normal-to-height
+            # (Keeping DepthAnything_V2 at 1024x1024 avoids multi-minute 2K/4K ViT-L stalls while preserving macro depth)
             if not is_single_leaf and str(mat_category).lower() != "decal":
                 workflow["79"] = {
                     "class_type": "DownloadAndLoadDepthAnythingV2Model",
@@ -15716,7 +15729,7 @@ def run_workflow(
                     "class_type": "DepthAnything_V2",
                     "inputs": {
                         "da_model": ["79", 0],
-                        "images": chord_img_input,
+                        "images": ["102", 0],
                     },
                 }
                 workflow["87"] = {
