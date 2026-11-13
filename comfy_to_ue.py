@@ -535,7 +535,7 @@ def _show_zero_generations_popup() -> None:
             "Out of AI Generations — Пополните баланс (0 Left)",
             (
                 "На вашей копии закончились AI-генерации (Generations: 0 left)!\n\n"
-                "• 1 генерация = 1 PBR-материал (или до ~50 кредитов на полную авто-конвертацию сцены из Corona / 3ds Max).\n"
+                "Проверьте достаточное количество кредитов для конвертации всех материалов Corona из вашей сцены в 3ds Max в Unreal Engine.\n\n"
                 "• Введите 12-словный ключ активации в поле '12-Word Seed / Key...'\n"
                 "• Или нажмите «Да (Yes)», чтобы открыть страницу пополнения баланса (+ Buy Generations)."
             ),
@@ -568,7 +568,7 @@ def consume_generation_credit(cost: int = 1, from_completion: bool = True) -> bo
     if 0 < new_bal <= LOW_GENERATIONS_WARNING_THRESHOLD:
         try:
             _set_panel_status(
-                f"[Low Credits Warning: {new_bal} left] <={LOW_GENERATIONS_WARNING_THRESHOLD} credits remaining! (Full Corona scene transfer uses ~50 credits — top up via '+ Buy Generations')",
+                f"[Low Credits: {new_bal} left] Проверьте достаточное количество кредитов для конвертации всех материалов Corona из вашей сцены в 3ds Max в Unreal Engine!",
                 color=(1.0, 0.78, 0.24, 1.0),
             )
         except Exception:
