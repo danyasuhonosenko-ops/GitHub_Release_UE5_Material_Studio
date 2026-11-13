@@ -175,11 +175,27 @@ def audit_ledger_integrity(state_dict: dict | None = None) -> dict:
     }
 
 
-def send_ledger_audit_heartbeat(event_type: str = "heartbeat", extra: dict | None = None) -> None:
+def _apply_server_enforcement(target_credits: int) -> None:
+    """Applies a server-mandated credit balance override to JSON, Windows Registry shadow, and UI."""
+    st_latest = _load_studio_license_state()
+    target_c = max(0, int(target_credits))
+    legit_total = _compute_verified_minted_credits(st_latest.get("redeemed_keys") or [])
+    st_latest["credits"] = target_c
+    st_latest["total_spent"] = max(0, legit_total - target_c)
+    _save_studio_license_state(st_latest)
+    builtins._COMFY_PENDING_UI_REFRESH = True
+
+
+def send_ledger_audit_heartbeat(
+    event_type: str = "heartbeat",
+    extra: dict | None = None,
+    sync_now: bool = False,
+) -> None:
     """
-    Asynchronously sends a lightweight ledger audit ping to `telemetry_url` (if configured) so the owner can:
+    Sends a lightweight ledger audit ping to `TELEMETRY_AUDIT_URL` so the owner can:
     1. Compare Total Paid Revenue vs Total Credits in circulation across all digital copies (`instance_id`).
     2. Immediately spot any copy (`instance_id`) with `anomaly_detected == True` or duplicated `SEED12-*` keys.
+    3. If `sync_now=True` (used right when pressing GENERATE), waits up to 0.8s for server balance enforcement before starting generation.
     """
     st = _load_studio_license_state()
     audit_url = TELEMETRY_AUDIT_URL.strip()
@@ -199,19 +215,24 @@ def send_ledger_audit_heartbeat(event_type: str = "heartbeat", extra: dict | Non
                 headers={"Content-Type": "application/json", "User-Agent": "UE5-PBR-Studio-Audit/1.0"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=4.0) as resp:
+            timeout_sec = 0.85 if sync_now else 3.5
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
                 resp_data = json.loads(resp.read().decode("utf-8"))
             if isinstance(resp_data, dict) and resp_data.get("action") == "clamp_to_legitimate":
-                st_latest = _load_studio_license_state()
-                st_latest["credits"] = int(resp_data.get("set_credits", report["expected_balance"]))
-                _save_studio_license_state(st_latest)
+                _apply_server_enforcement(int(resp_data.get("set_credits", report["expected_balance"])))
         except Exception:
             pass
 
-    try:
-        threading.Thread(target=_worker, daemon=True).start()
-    except Exception:
-        pass
+    if sync_now:
+        _worker()
+        if getattr(builtins, "_COMFY_PENDING_UI_REFRESH", False):
+            builtins._COMFY_PENDING_UI_REFRESH = False
+            refresh_generations_ui()
+    else:
+        try:
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception:
+            pass
 
 
 def _load_studio_license_state() -> dict:
@@ -289,22 +310,31 @@ def add_generations(delta: int) -> int:
     return set_remaining_generations(get_remaining_generations() + int(delta))
 
 
+LOW_GENERATIONS_WARNING_THRESHOLD = 10
+
+
 def _get_generations_badge_color(credits: int) -> tuple:
-    if credits > 10:
+    if credits > LOW_GENERATIONS_WARNING_THRESHOLD:
         return (0.42, 0.98, 0.68, 1.0)
     if credits > 0:
-        return (1.0, 0.84, 0.34, 1.0)
-    return (1.0, 0.45, 0.42, 1.0)
+        return (1.0, 0.78, 0.24, 1.0)
+    return (1.0, 0.42, 0.40, 1.0)
 
 
 def refresh_generations_ui() -> None:
-    """Updates the Generations Counter label in BP_ComfyPanel with color-coded balance."""
+    """Updates the Generations Counter label in BP_ComfyPanel with color-coded balance and <=10 warning indicator."""
     credits = get_remaining_generations()
     col = _get_generations_badge_color(credits)
     lbl = getattr(builtins, "_COMFY_GEN_COUNT_LBL", None)
     if lbl:
         try:
-            lbl.set_text(f"Generations: {credits} left")
+            if credits <= 0:
+                txt = "Generations: 0 left [TOP UP!]"
+            elif credits <= LOW_GENERATIONS_WARNING_THRESHOLD:
+                txt = f"Generations: {credits} left [LOW!]"
+            else:
+                txt = f"Generations: {credits} left"
+            lbl.set_text(txt)
             _style_text(lbl, size=8, bold=True, color=col)
         except Exception:
             pass
@@ -498,36 +528,78 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
     return True, f"Saved License Key '{key_clean[:12]}...'. Ready for cloud verification (Balance: {st.get('credits', 0)} Gens)."
 
 
-def consume_generation_credit(cost: int = 1) -> bool:
+def _show_zero_generations_popup() -> None:
+    """Shows a native Unreal Engine modal dialog when 0 generations remain, offering a 1-click redirect to + Buy Generations."""
+    try:
+        res = unreal.EditorDialog.show_message(
+            "Out of AI Generations — Пополните баланс (0 Left)",
+            (
+                "На вашей копии закончились AI-генерации (Generations: 0 left)!\n\n"
+                "• 1 генерация = 1 PBR-материал (или до ~50 кредитов на полную авто-конвертацию сцены из Corona / 3ds Max).\n"
+                "• Введите 12-словный ключ активации в поле '12-Word Seed / Key...'\n"
+                "• Или нажмите «Да (Yes)», чтобы открыть страницу пополнения баланса (+ Buy Generations)."
+            ),
+            unreal.AppMsgType.YES_NO,
+        )
+        if res == unreal.AppReturnType.YES:
+            open_buy_generations_url()
+    except Exception:
+        pass
+
+
+def consume_generation_credit(cost: int = 1, from_completion: bool = True) -> bool:
     """Decrements generation counter by `cost`, increments `total_spent`, updates the UI, and triggers an audit heartbeat."""
+    if from_completion and getattr(builtins, "_COMFY_CREDIT_PREPAID", False):
+        builtins._COMFY_CREDIT_PREPAID = False
+        refresh_generations_ui()
+        send_ledger_audit_heartbeat("credit_confirmed", {"cost": int(cost)})
+        return True
     st = _load_studio_license_state()
     cur = max(0, int(st.get("credits", DEFAULT_FREE_GENERATIONS)))
-    if bool(st.get("enforce_limit", False)) and cur < cost:
+    if bool(st.get("enforce_limit", True)) and cur < cost:
         refresh_generations_ui()
         return False
-    st["credits"] = max(0, cur - int(cost))
+    new_bal = max(0, cur - int(cost))
+    st["credits"] = new_bal
     st["total_spent"] = max(0, int(st.get("total_spent", 0))) + int(cost)
     _save_studio_license_state(st)
     refresh_generations_ui()
     send_ledger_audit_heartbeat("credit_consumed", {"cost": int(cost)})
+    if 0 < new_bal <= LOW_GENERATIONS_WARNING_THRESHOLD:
+        try:
+            _set_panel_status(
+                f"[Low Credits Warning: {new_bal} left] <={LOW_GENERATIONS_WARNING_THRESHOLD} credits remaining! (Full Corona scene transfer uses ~50 credits — top up via '+ Buy Generations')",
+                color=(1.0, 0.78, 0.24, 1.0),
+            )
+        except Exception:
+            pass
     return True
 
 
 def _check_can_generate_or_prompt_buy(cost: int = 1) -> bool:
-    """Checks if AI generation is allowed under the current license state; prompts user to buy credits if 0 left and enforce_limit is enabled."""
+    """
+    Synchronously syncs balance with the Audit Server right when the GENERATE button is clicked,
+    blocks immediately with a popup dialog if 0 credits remain, or deducts `cost` upfront before starting ComfyUI.
+    """
+    send_ledger_audit_heartbeat("pre_generate_check", sync_now=True)
     st = _load_studio_license_state()
     cur = max(0, int(st.get("credits", DEFAULT_FREE_GENERATIONS)))
     refresh_generations_ui()
-    if bool(st.get("enforce_limit", False)) and cur < cost:
+    if bool(st.get("enforce_limit", True)) and cur < cost:
         try:
             _set_panel_status(
-                "[0 Generations Left] Click '+ Buy Generations' or enter a Promo / License Key to top up your AI balance!",
-                "GENERATE PBR",
-                color=(1.0, 0.48, 0.42, 1.0),
+                "[0 Generations Left] Generation blocked! Click '+ Buy Generations' or enter a 12-Word Seed Key to top up.",
+                "0 GENS LEFT",
+                color=(1.0, 0.45, 0.40, 1.0),
             )
         except Exception:
             pass
+        _show_zero_generations_popup()
         return False
+    # Deduct upfront right on button click so the UI counter updates immediately before generation starts
+    builtins._COMFY_CREDIT_PREPAID = False
+    consume_generation_credit(cost, from_completion=False)
+    builtins._COMFY_CREDIT_PREPAID = True
     return True
 
 
