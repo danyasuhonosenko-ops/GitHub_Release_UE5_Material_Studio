@@ -225,7 +225,7 @@ def _load_studio_license_state() -> dict:
         "buy_url": BUY_GENERATIONS_URL,
         "donate_url": DONATE_URL,
         "telemetry_url": TELEMETRY_AUDIT_URL,
-        "enforce_limit": False,
+        "enforce_limit": True,
         "redeemed_keys": list(shadow.get("redeemed_keys") or []),
     }
     try:
@@ -236,6 +236,7 @@ def _load_studio_license_state() -> dict:
                 for k, v in default_state.items():
                     data.setdefault(k, v)
                 data["instance_id"] = inst_id
+                data["enforce_limit"] = True
                 # Reconcile monotonic total_spent and redeemed_keys with Windows Registry shadow
                 data["total_spent"] = max(int(data.get("total_spent", 0)), int(shadow.get("total_spent", 0)))
                 merged_keys = list(dict.fromkeys(list(data.get("redeemed_keys") or []) + list(shadow.get("redeemed_keys") or [])))
