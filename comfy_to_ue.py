@@ -9209,21 +9209,12 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
         _place_on_canvas(canvas, s_box, pos_x, pos_y, width, height, apply_layout=apply_layout)
         return s_box
 
-    # === AI Generations Counter, License / Promo Key Input & "+ Buy Generations" Redirect Row (Y = 126.5) ===
+    # === License / Promo Key Input, AI Generations Counter & "+ Buy Generations" Redirect Row (Y = 126.5) ===
     if not is_wt:
-        cur_gens = get_remaining_generations()
-        gen_col = _get_generations_badge_color(cur_gens)
-        gen_count_lbl = _setup_named_label(
-            w, is_wt, canvas, "GenerationsCountLabel",
-            f"Generations: {cur_gens} left",
-            14.0, 130.0, 126.0, 15.0,
-            size=8, bold=True, color=gen_col,
-            apply_layout=True,
-        )
         lic_key_box = _create_search_box(
-            "LicenseKeyBox", 142.0, 126.5, 132.0, "License / Promo Key...", height=22.0
+            "LicenseKeyBox", 14.0, 126.5, 136.0, "License / Promo Key...", height=22.0
         )
-        _place_on_canvas(canvas, lic_key_box, 142.0, 126.5, 132.0, 22.0, apply_layout=True)
+        _place_on_canvas(canvas, lic_key_box, 14.0, 126.5, 136.0, 22.0, apply_layout=True)
         try:
             saved_k = str(_load_studio_license_state().get("license_key") or "").strip()
             if saved_k and not str(lic_key_box.get_text() or "").strip():
@@ -9233,6 +9224,16 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             )
         except Exception:
             pass
+
+        cur_gens = get_remaining_generations()
+        gen_col = _get_generations_badge_color(cur_gens)
+        gen_count_lbl = _setup_named_label(
+            w, is_wt, canvas, "GenerationsCountLabel",
+            f"Generations: {cur_gens} left",
+            156.0, 130.0, 118.0, 15.0,
+            size=8, bold=True, color=gen_col,
+            apply_layout=True,
+        )
 
         buy_gens_btn = _setup_named_button(
             w, is_wt, canvas, "BuyGenerationsBtn", "BuyGenerationsBtnLabel",
