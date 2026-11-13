@@ -65,27 +65,64 @@ STUDIO_LICENSE_FILE = os.path.join(_SCRIPT_DIR, "studio_license_state.json")
 DEFAULT_FREE_GENERATIONS = 25
 
 
+# Salted SHA-256 digests of promo codes (plaintext promo codes are never stored in source)
+_PROMO_HASH_PACKS = {
+    "e838fb679ed61e1b": 25,
+    "1303347071dde58a": 25,
+    "b53590a7be25fa93": 50,
+    "1e3abcadd2680918": 100,
+    "d7eb7f7176fec5ba": 500,
+}
+
+
+def _hash_promo_token(code_str: str) -> str:
+    clean = (code_str or "").strip().upper()
+    if clean.startswith("PROMO-") and len(clean) == 22:
+        return clean[6:].lower()
+    return hashlib.sha256(f"UE5_PBR_PROMO_SALT_V1:{clean}".encode("utf-8")).hexdigest()[:16]
+
+
 def get_instance_fingerprint() -> str:
-    """Returns a deterministic hardware-bound digital copy ID (e.g. 'PBR-8F3A91C2') for this installation."""
+    """Returns a deterministic hardware-bound digital copy ID (e.g. 'PBR-8F3A91-C204B7') for this installation."""
     try:
         import platform
         import uuid
         raw_hw = f"UE5_PBR_INSTANCE|{uuid.getnode()}|{platform.node()}|{platform.machine()}"
-        h_hex = hashlib.sha256(raw_hw.encode("utf-8")).hexdigest()[:8].upper()
-        return f"PBR-{h_hex[:4]}-{h_hex[4:8]}"
+        h_hex = hashlib.sha256(raw_hw.encode("utf-8")).hexdigest()[:12].upper()
+        return f"PBR-{h_hex[:6]}-{h_hex[6:12]}"
     except Exception:
-        return "PBR-0000-0000"
+        return "PBR-000000-000000"
+
+
+def _load_shadow_ledger() -> dict:
+    """Reads anti-reset shadow state (`total_spent`, `redeemed_keys`) from Windows Registry / %LOCALAPPDATA%."""
+    shadow = {"total_spent": 0, "redeemed_keys": []}
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\UE5PBRStudio\Ledger") as rk:
+            sp, _ = winreg.QueryValueEx(rk, "TotalSpent")
+            rk_str, _ = winreg.QueryValueEx(rk, "RedeemedKeys")
+            shadow["total_spent"] = max(0, int(sp))
+            if rk_str:
+                shadow["redeemed_keys"] = json.loads(rk_str)
+    except Exception:
+        pass
+    return shadow
+
+
+def _save_shadow_ledger(total_spent: int, redeemed_keys: list) -> None:
+    """Persists monotonic `total_spent` and `redeemed_keys` into Windows Registry so deleting JSON cannot reset balance."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\UE5PBRStudio\Ledger") as rk:
+            winreg.SetValueEx(rk, "TotalSpent", 0, winreg.REG_DWORD, max(0, int(total_spent)))
+            winreg.SetValueEx(rk, "RedeemedKeys", 0, winreg.REG_SZ, json.dumps(list(redeemed_keys or [])))
+    except Exception:
+        pass
 
 
 def _compute_verified_minted_credits(redeemed_keys: list) -> int:
-    """Computes the exact total credits legitimately unlocked by redeemed 12-word seeds & promo codes."""
-    promo_packs = {
-        "BETA25": 25,
-        "LINKEDIN25": 25,
-        "WELCOME50": 50,
-        "STUDIO100": 100,
-        "PRO500": 500,
-    }
+    """Computes the exact total credits legitimately unlocked by redeemed 12-word seeds & hashed promo codes."""
     tier_map = {
         0: 10, 1: 25, 2: 50, 3: 100, 4: 250,
         5: 500, 6: 1000, 7: 2500, 8: 5000, 9: 10000,
@@ -97,8 +134,9 @@ def _compute_verified_minted_credits(redeemed_keys: list) -> int:
         if not ks or ks in seen:
             continue
         seen.add(ks)
-        if ks in promo_packs:
-            total_unlocked += promo_packs[ks]
+        ph = _hash_promo_token(ks)
+        if ph in _PROMO_HASH_PACKS:
+            total_unlocked += _PROMO_HASH_PACKS[ph]
         elif ks.startswith("SEED12-"):
             parts = ks.split("-")
             if len(parts) == 3:
@@ -143,7 +181,7 @@ def send_ledger_audit_heartbeat(event_type: str = "heartbeat", extra: dict | Non
     2. Immediately spot any copy (`instance_id`) with `anomaly_detected == True` or duplicated `SEED12-*` keys.
     """
     st = _load_studio_license_state()
-    audit_url = str(st.get("telemetry_url") or TELEMETRY_AUDIT_URL).strip()
+    audit_url = TELEMETRY_AUDIT_URL.strip()
     report = audit_ledger_integrity(st)
     report["event"] = event_type
     report["timestamp"] = int(time.time())
@@ -176,18 +214,19 @@ def send_ledger_audit_heartbeat(event_type: str = "heartbeat", extra: dict | Non
 
 
 def _load_studio_license_state() -> dict:
-    """Loads persistent generation credits, instance_id, license key, payment URL, and donate URL from studio_license_state.json."""
+    """Loads persistent generation credits, instance_id, license key, payment URL, and donate URL from studio_license_state.json + Windows Registry shadow."""
     inst_id = get_instance_fingerprint()
+    shadow = _load_shadow_ledger()
     default_state = {
         "instance_id": inst_id,
-        "credits": DEFAULT_FREE_GENERATIONS,
-        "total_spent": 0,
+        "credits": max(0, DEFAULT_FREE_GENERATIONS - int(shadow.get("total_spent", 0))),
+        "total_spent": int(shadow.get("total_spent", 0)),
         "license_key": "",
         "buy_url": BUY_GENERATIONS_URL,
         "donate_url": DONATE_URL,
         "telemetry_url": TELEMETRY_AUDIT_URL,
         "enforce_limit": False,
-        "redeemed_keys": [],
+        "redeemed_keys": list(shadow.get("redeemed_keys") or []),
     }
     try:
         if os.path.exists(STUDIO_LICENSE_FILE):
@@ -197,6 +236,10 @@ def _load_studio_license_state() -> dict:
                 for k, v in default_state.items():
                     data.setdefault(k, v)
                 data["instance_id"] = inst_id
+                # Reconcile monotonic total_spent and redeemed_keys with Windows Registry shadow
+                data["total_spent"] = max(int(data.get("total_spent", 0)), int(shadow.get("total_spent", 0)))
+                merged_keys = list(dict.fromkeys(list(data.get("redeemed_keys") or []) + list(shadow.get("redeemed_keys") or [])))
+                data["redeemed_keys"] = merged_keys
                 return data
     except Exception:
         pass
@@ -209,7 +252,14 @@ def _load_studio_license_state() -> dict:
 
 
 def _save_studio_license_state(state_dict: dict) -> None:
-    """Saves studio_license_state.json to disk."""
+    """Saves studio_license_state.json to disk and updates Windows Registry shadow."""
+    try:
+        _save_shadow_ledger(
+            int(state_dict.get("total_spent", 0)),
+            list(state_dict.get("redeemed_keys") or []),
+        )
+    except Exception:
+        pass
     try:
         with open(STUDIO_LICENSE_FILE, "w", encoding="utf-8") as f:
             json.dump(state_dict, f, indent=2, ensure_ascii=False)
@@ -424,26 +474,21 @@ def activate_license_or_promo_key(key_raw: str) -> tuple:
         send_ledger_audit_heartbeat("seed_redeemed", {"redeemed_id": seed_id, "added_credits": seed_credits})
         return True, f"{seed_msg} (New Balance: {st['credits']} Gens)"
 
-    # 2. Check short promo codes
+    # 2. Check short promo codes via salted SHA-256 digest (plaintext promo codes are hidden)
     key_up = key_clean.upper()
-    promo_packs = {
-        "BETA25": 25,
-        "LINKEDIN25": 25,
-        "WELCOME50": 50,
-        "STUDIO100": 100,
-        "PRO500": 500,
-    }
-    if key_up in promo_packs:
-        if key_up in redeemed:
+    promo_digest = _hash_promo_token(key_up)
+    promo_canonical = f"PROMO-{promo_digest.upper()}"
+    if promo_digest in _PROMO_HASH_PACKS:
+        if promo_canonical in redeemed or key_up in redeemed:
             return False, f"Promo code '{key_up}' was already activated on this machine."
-        added = promo_packs[key_up]
-        redeemed.append(key_up)
+        added = _PROMO_HASH_PACKS[promo_digest]
+        redeemed.append(promo_canonical)
         st["redeemed_keys"] = redeemed
-        st["license_key"] = key_clean
+        st["license_key"] = promo_canonical
         st["credits"] = max(0, int(st.get("credits", 0))) + added
         _save_studio_license_state(st)
         refresh_generations_ui()
-        send_ledger_audit_heartbeat("promo_redeemed", {"redeemed_id": key_up, "added_credits": added})
+        send_ledger_audit_heartbeat("promo_redeemed", {"redeemed_id": promo_canonical, "added_credits": added})
         return True, f"Activated '{key_up}'! +{added} AI Generations added (Balance: {st['credits']} Gens)."
     st["license_key"] = key_clean
     _save_studio_license_state(st)
@@ -9493,7 +9538,8 @@ def enhance_comfy_panel_ui(widget=None, is_wt: bool = False, apply_layout: bool 
             st_now = _load_studio_license_state()
             redeemed_now = set(st_now.get("redeemed_keys") or [])
             word_cnt = len([t for t in typed_k.replace(",", " ").replace("-", " ").split() if t.strip()])
-            if word_cnt >= 4 or (typed_k and typed_k.upper() in ("BETA25", "LINKEDIN25", "WELCOME50", "STUDIO100", "PRO500") and typed_k.upper() not in redeemed_now):
+            p_hash = _hash_promo_token(typed_k) if typed_k else ""
+            if word_cnt >= 4 or (p_hash in _PROMO_HASH_PACKS and f"PROMO-{p_hash.upper()}" not in redeemed_now):
                 ok, msg = activate_license_or_promo_key(typed_k)
                 if ok and lic_key_box:
                     try:
