@@ -1,0 +1,28 @@
+{
+    "FileVersion": 3,
+    "Version": 211,
+    "VersionName": "2.1.1",
+    "FriendlyName": "AI PBR Material Studio",
+    "Description": "AI-powered seamless PBR material generator for Unreal Engine 5.4+ (Universal Zero-C++ GitHub Edition: key-activated cloud generations + offline multi-layer material mixer, procedural parquet and tile seams, anti-tiling, polygon ID assignment, and mesh paint).",
+    "Category": "Materials",
+    "CreatedBy": "NeuroPlugin Lab",
+    "CreatedByURL": "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio",
+    "DocsURL": "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio#readme",
+    "MarketplaceURL": "",
+    "SupportURL": "https://github.com/danyasuhonosenko-ops/GitHub_Release_UE5_Material_Studio/issues",
+    "CanContainContent": true,
+    "IsBetaVersion": false,
+    "IsExperimentalVersion": false,
+    "Installed": true,
+    "Plugins": [
+        {
+            "Name": "PythonScriptPlugin",
+            "Enabled": true
+        },
+        {
+            "Name": "EditorScriptingUtilities",
+            "Enabled": true
+        }
+    ],
+    "EnabledByDefault": true
+}
