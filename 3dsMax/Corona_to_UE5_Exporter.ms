@@ -578,7 +578,7 @@ rollout CoronaToUE5ExporterRollout "Corona -> UE5 Clean Exporter, Layer Explorer
         local iorTag = "1.52"
         local shTag = "0"
         local emTag = "0"
-        local tA = ""; local tR = ""; local tN = ""; local tM = ""; local tO = ""
+        local tA = ""; local tR = ""; local tN = ""; local tM = ""; local tOp = ""
 
         if srcCls == "CoronaLightMtl" then (
             try (colTag = ((srcMtl.color.r as integer) as string) + "_" + ((srcMtl.color.g as integer) as string) + "_" + ((srcMtl.color.b as integer) as string)) catch ()
@@ -597,11 +597,11 @@ rollout CoronaToUE5ExporterRollout "Corona -> UE5 Clean Exporter, Layer Explorer
             try (if srcMtl.baseRoughnessTexmapOn do tR = describeTexmapFingerprint srcMtl.baseRoughnessTexmap) catch ()
             try (if srcMtl.baseBumpTexmapOn do tN = describeTexmapFingerprint srcMtl.baseBumpTexmap) catch ()
             try (if srcMtl.metalnessTexmapOn do tM = describeTexmapFingerprint srcMtl.metalnessTexmap) catch ()
-            try (if srcMtl.opacityTexmapOn and srcMtl.opacityTexmap != undefined do tO = describeTexmapFingerprint srcMtl.opacityTexmap) catch ()
-            try (if tO == "" and srcMtl.texmapOnOpacity and srcMtl.texmapOpacity != undefined do tO = describeTexmapFingerprint srcMtl.texmapOpacity) catch ()
+            try (if srcMtl.opacityTexmapOn and srcMtl.opacityTexmap != undefined do tOp = describeTexmapFingerprint srcMtl.opacityTexmap) catch ()
+            try (if tOp == "" and srcMtl.texmapOnOpacity and srcMtl.texmapOpacity != undefined do tOp = describeTexmapFingerprint srcMtl.texmapOpacity) catch ()
         )
 
-        local rawSig = (sanitizeName cls) + "|" + (sanitizeName srcCls) + "|c=" + colTag + "|r=" + rTag + "|m=" + mTag + "|rf=" + refTag + "|ior=" + iorTag + "|sh=" + shTag + "|em=" + emTag + "|A=" + tA + "|R=" + tR + "|N=" + tN + "|M=" + tM + "|O=" + tO + lbSig
+        local rawSig = (sanitizeName cls) + "|" + (sanitizeName srcCls) + "|c=" + colTag + "|r=" + rTag + "|m=" + mTag + "|rf=" + refTag + "|ior=" + iorTag + "|sh=" + shTag + "|em=" + emTag + "|A=" + tA + "|R=" + tR + "|N=" + tN + "|M=" + tM + "|O=" + tOp + lbSig
         if pyMod != undefined then (
             try (return ((pyMod.ms_hash_sig rawSig) as string)) catch ()
         )
