@@ -1,0 +1,12 @@
+{
+  "active_comfy_url": "https://desktop-kbo2jj9.tail754f20.ts.net",
+  "public_gateway_url": "https://desktop-kbo2jj9.tail754f20.ts.net",
+  "primary_node": "https://danya-pc.tail754f20.ts.net:10000",
+  "mirror_node": "https://desktop-kbo2jj9.tail754f20.ts.net:10000",
+  "latest_version": "v2.1.1",
+  "ota_hash": "ca4f253ffccc7149",
+  "max_ota_hash": "4357c23dc429e8ea",
+  "blender_version": "v2.1.1",
+  "blender_sha": "1d33ef841ded1a2e",
+  "updated_at": 1795788343
+}

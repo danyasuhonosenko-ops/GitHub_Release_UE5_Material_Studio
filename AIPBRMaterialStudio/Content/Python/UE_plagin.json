@@ -1,0 +1,191 @@
+{
+  "71": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "SDXL\\realvisxlV50_v50Bakedvae.safetensors"
+    }
+  },
+  "101": {
+    "class_type": "SeamlessTile",
+    "inputs": {
+      "model": [
+        "71",
+        0
+      ],
+      "tiling": "enable",
+      "copy_model": "Modify in place"
+    }
+  },
+  "72": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "Top-down orthographic view of a seamless tileable oak wood parquet floor, flat even studio lighting, no shadows, photorealistic 8k PBR material, sharp micro-details",
+      "clip": [
+        "71",
+        1
+      ]
+    }
+  },
+  "73": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "perspective, angled view, 3d render, harsh shadows, directional lighting, specular highlights, vignette, depth of field, blurry, low quality, seam, visible border, watermark, text",
+      "clip": [
+        "71",
+        1
+      ]
+    }
+  },
+  "77": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "105": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 181744905526073,
+      "steps": 25,
+      "cfg": 5.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1.0,
+      "model": [
+        "101",
+        0
+      ],
+      "positive": [
+        "72",
+        0
+      ],
+      "negative": [
+        "73",
+        0
+      ],
+      "latent_image": [
+        "77",
+        0
+      ]
+    }
+  },
+  "75": {
+    "class_type": "CircularVAEDecode",
+    "inputs": {
+      "samples": [
+        "105",
+        0
+      ],
+      "vae": [
+        "71",
+        2
+      ],
+      "tiling": "enable"
+    }
+  },
+  "102": {
+    "class_type": "EnhanceDetail",
+    "inputs": {
+      "images": [
+        "75",
+        0
+      ],
+      "filter_radius": 2,
+      "sigma": 0.1,
+      "denoise": 0.05,
+      "detail_mult": 1.35
+    }
+  },
+  "76": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_albedo",
+      "images": [
+        "102",
+        0
+      ]
+    }
+  },
+  "78": {
+    "class_type": "DepthAnything_V2",
+    "inputs": {
+      "da_model": [
+        "79",
+        0
+      ],
+      "images": [
+        "102",
+        0
+      ]
+    }
+  },
+  "80": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_height",
+      "images": [
+        "78",
+        0
+      ]
+    }
+  },
+  "81": {
+    "class_type": "NormalMapSimple",
+    "inputs": {
+      "images": [
+        "102",
+        0
+      ],
+      "scale_XY": 1.5
+    }
+  },
+  "82": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_normal",
+      "images": [
+        "81",
+        0
+      ]
+    }
+  },
+  "83": {
+    "class_type": "ImageDesaturate+",
+    "inputs": {
+      "image": [
+        "102",
+        0
+      ],
+      "factor": 1.0,
+      "method": "luminance (Rec.709)"
+    }
+  },
+  "84": {
+    "class_type": "ImageInvert",
+    "inputs": {
+      "image": [
+        "83",
+        0
+      ]
+    }
+  },
+  "85": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "api_roughness",
+      "images": [
+        "84",
+        0
+      ]
+    }
+  },
+  "79": {
+    "class_type": "DownloadAndLoadDepthAnythingV2Model",
+    "inputs": {
+      "model": "depth_anything_v2_vitl_fp16.safetensors",
+      "precision": "fp32"
+    }
+  }
+}

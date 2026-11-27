@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+_bake_tmp/
+LivePaintMasks/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+*.pdb
+Intermediate/
+Saved/
